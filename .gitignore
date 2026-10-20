@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+backend/node_modules/
+frontend/node_modules/
+
+# Build output
+frontend/dist/
+
+# Environment variables (keep secrets out of GitHub!)
+.env
+.env.*
+!.env.example
+backend/.env
+frontend/.env
+
+# OS & Editor files
+.DS_Store
+*.log

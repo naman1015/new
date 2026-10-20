@@ -1,0 +1,112 @@
+const express = require('express');
+const Device = require('../models/Device');
+const User = require('../models/User');
+const { protect, protectDevice, restrictTo } = require('../middleware/auth');
+
+const router = express.Router();
+
+// POST /api/device/heartbeat — ESP32 sends health data every 60s
+router.post('/heartbeat', protectDevice, async (req, res) => {
+  try {
+    const { deviceId, wifiStrength, firmwareVersion, uptimeSeconds, freeHeapBytes } = req.body;
+
+    const device = await Device.findOneAndUpdate(
+      { deviceId },
+      {
+        isOnline: true,
+        lastHeartbeat: {
+          receivedAt: new Date(),
+          wifiStrength,
+          firmwareVersion,
+          uptimeSeconds,
+          freeHeapBytes,
+        },
+      },
+      { new: true, upsert: true } // create if doesn't exist
+    );
+
+    res.json({ message: 'Heartbeat received.', device });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// POST /api/device/link — link device to logged-in user
+router.post('/link', protect, async (req, res) => {
+  try {
+    const { deviceId } = req.body;
+
+    if (!deviceId) {
+      return res.status(400).json({ message: 'deviceId is required.' });
+    }
+
+    let device = await Device.findOne({ deviceId });
+    if (!device) {
+      // If device hasn't sent heartbeat yet, pre-register it
+      device = await Device.create({ deviceId, patient: req.user._id });
+    } else {
+      if (device.patient && device.patient.toString() !== req.user._id.toString()) {
+        return res.status(400).json({ message: 'Device is already linked to another patient.' });
+      }
+      device.patient = req.user._id;
+      await device.save();
+    }
+
+    // Link device in User model
+    await User.findByIdAndUpdate(req.user._id, { device: device._id });
+
+    res.json({ message: 'Device linked successfully.', device });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+
+// POST /api/device/register — register a new device (admin/dashboard)
+router.post('/register', protect, restrictTo('admin'), async (req, res) => {
+  try {
+    const { deviceId, patientId } = req.body;
+
+    const existing = await Device.findOne({ deviceId });
+    if (existing) {
+      return res.status(400).json({ message: 'Device already registered.' });
+    }
+
+    const device = await Device.create({ deviceId, patient: patientId });
+
+    // Link device to patient
+    await User.findByIdAndUpdate(patientId, { device: device._id });
+
+    res.status(201).json({ message: 'Device registered.', device });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// GET /api/device/:deviceId — get device status
+router.get('/:deviceId', protect, async (req, res) => {
+  try {
+    const device = await Device.findOne({ deviceId: req.params.deviceId }).populate(
+      'patient',
+      'name email'
+    );
+
+    if (!device) return res.status(404).json({ message: 'Device not found.' });
+
+    res.json({ device });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// GET /api/device — get all devices (admin)
+router.get('/', protect, restrictTo('admin'), async (req, res) => {
+  try {
+    const devices = await Device.find().populate('patient', 'name email');
+    res.json({ devices });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+module.exports = router;

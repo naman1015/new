@@ -1,0 +1,170 @@
+const express = require('express');
+const Medication = require('../models/Medication');
+const { protect, restrictTo } = require('../middleware/auth');
+
+const router = express.Router();
+
+// All routes require login
+router.use(protect);
+
+// POST /api/medications — add a new medication (doctor/caretaker/admin)
+router.post('/', async (req, res) => {
+  try {
+    const {
+      name,
+      slotIndex,
+      slotColor,
+      dosageAmount,
+      dosageUnit,
+      times,
+      daysOfWeek,
+      stockCount,
+      stockAlertThreshold,
+      notes,
+      startDate,
+      endDate,
+    } = req.body;
+
+    // Patient always adds for themselves; others must specify patientId
+    const patientId = req.user.role === 'patient'
+      ? req.user._id
+      : req.body.patientId;
+
+    if (!patientId) {
+      return res.status(400).json({ message: 'patientId is required.' });
+    }
+
+    // Check slot is not already in use for this patient
+    const slotTaken = await Medication.findOne({
+      patient: patientId,
+      slotIndex,
+      isActive: true,
+    });
+
+    if (slotTaken) {
+      return res.status(400).json({
+        message: `Slot ${slotIndex} is already used by "${slotTaken.name}". Please use a different slot.`,
+      });
+    }
+
+    const medication = await Medication.create({
+      patient: patientId,
+      addedBy: req.user._id,
+      name,
+      slotIndex,
+      slotColor: slotColor || 'white',
+      dosageAmount: dosageAmount || 1,
+      dosageUnit: dosageUnit || 'tablet',
+      times,
+      daysOfWeek: daysOfWeek || [],
+      stockCount: stockCount || 30,
+      stockAlertThreshold: stockAlertThreshold || 5,
+      notes,
+      startDate,
+      endDate,
+    });
+
+    res.status(201).json({ message: 'Medication added.', medication });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// GET /api/medications — get all medications for logged-in patient
+// or all medications for linked patients if caretaker/doctor
+router.get('/', async (req, res) => {
+  try {
+    let query = {};
+
+    if (req.user.role === 'patient') {
+      query.patient = req.user._id;
+    } else if (['caretaker', 'doctor'].includes(req.user.role)) {
+      const patientId = req.query.patientId;
+      if (!patientId) {
+        return res.status(400).json({ message: 'patientId query param required.' });
+      }
+      // Make sure this caretaker is linked to the patient
+      const isLinked = req.user.linkedPatients
+        .map((id) => id.toString())
+        .includes(patientId);
+      if (!isLinked && req.user.role !== 'admin') {
+        return res.status(403).json({ message: 'Not linked to this patient.' });
+      }
+      query.patient = patientId;
+    } else if (req.user.role === 'admin') {
+      if (req.query.patientId) query.patient = req.query.patientId;
+    }
+
+    const medications = await Medication.find({ ...query, isActive: true })
+      .populate('patient', 'name email')
+      .populate('addedBy', 'name role')
+      .sort({ slotIndex: 1 });
+
+    res.json({ medications });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// GET /api/medications/:id — get single medication
+router.get('/:id', async (req, res) => {
+  try {
+    const medication = await Medication.findById(req.params.id)
+      .populate('patient', 'name email')
+      .populate('addedBy', 'name role');
+
+    if (!medication) {
+      return res.status(404).json({ message: 'Medication not found.' });
+    }
+
+    res.json({ medication });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// PATCH /api/medications/:id — update a medication
+router.patch('/:id', restrictTo('doctor', 'caretaker', 'admin'), async (req, res) => {
+  try {
+    const medication = await Medication.findByIdAndUpdate(
+      req.params.id,
+      req.body,
+      { new: true, runValidators: true }
+    );
+
+    if (!medication) {
+      return res.status(404).json({ message: 'Medication not found.' });
+    }
+
+    res.json({ message: 'Medication updated.', medication });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// DELETE /api/medications/:id — soft delete
+router.delete('/:id', restrictTo('doctor', 'admin'), async (req, res) => {
+  try {
+    await Medication.findByIdAndUpdate(req.params.id, { isActive: false });
+    res.json({ message: 'Medication deactivated.' });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// PATCH /api/medications/:id/stock — update stock count
+router.patch('/:id/stock', async (req, res) => {
+  try {
+    const { stockCount } = req.body;
+    const medication = await Medication.findByIdAndUpdate(
+      req.params.id,
+      { stockCount },
+      { new: true }
+    );
+    res.json({ message: 'Stock updated.', medication });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+module.exports = router;
