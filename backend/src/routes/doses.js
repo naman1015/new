@@ -190,10 +190,24 @@ router.get('/pending', protectDevice, async (req, res) => {
       };
     });
 
+    const activeMeds = await Medication.find({ patient: patientId, isActive: true }).sort({ slotIndex: 1 });
+    const slotSchedule = activeMeds
+      .filter((m) => m.times && m.times.length > 0)
+      .map((m) => {
+        const [h, min] = m.times[0].split(':').map(Number);
+        return {
+          slotIndex: m.slotIndex,
+          hour: Number.isNaN(h) ? 8 : h,
+          minute: Number.isNaN(min) ? 0 : min,
+          name: m.name,
+        };
+      });
+
     res.json({
       serverTimeEpochMs: now.getTime(),
       serverTimeISO: now.toISOString(),
       serverTimeIST,
+      slotSchedule,
       doses,
       nextDose: doses[0] || null,
     });

@@ -150,10 +150,10 @@ export default function Medications() {
           marginBottom: 12,
           fontWeight: 700 
         }}>
-          Dispenser Slots ({meds.length} of 5 slots in use)
+          Dispenser Slots ({meds.length} of 6 slots in use)
         </p>
         <div style={{ display: 'flex', gap: 10 }}>
-          {[1, 2, 3, 4, 5].map(slot => {
+          {[1, 2, 3, 4, 5, 6].map(slot => {
             const med = meds.find(m => m.slotIndex === slot);
             return (
               <div key={slot} style={{
@@ -168,7 +168,7 @@ export default function Medications() {
           })}
         </div>
         <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
-          {[1, 2, 3, 4, 5].map(slot => (
+          {[1, 2, 3, 4, 5, 6].map(slot => (
             <div key={slot} style={{ 
               flex: 1, 
               textAlign: 'center', 
@@ -334,10 +334,10 @@ export default function Medications() {
                   <label>Dispenser Slot</label>
                   <select className="input" value={form.slotIndex}
                     onChange={e => setForm(f => ({ ...f, slotIndex: Number(e.target.value) }))}>
-                    {[1, 2, 3, 4, 5].map(s => (
+                    {[1, 2, 3, 4, 5, 6].map(s => (
                       <option key={s} value={s}
-                        disabled={meds.some(m => m.slotIndex === s)}>
-                        Slot {s}{meds.some(m => m.slotIndex === s) ? ' (used)' : ''}
+                        disabled={meds.some(m => m.slotIndex === s && m._id !== editingId)}>
+                        Slot {s}{meds.some(m => m.slotIndex === s && m._id !== editingId) ? ' (used)' : ''}
                       </option>
                     ))}
                   </select>

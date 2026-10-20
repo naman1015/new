@@ -19,12 +19,12 @@ const medicationSchema = new mongoose.Schema(
       required: [true, 'Medication name is required'],
       trim: true,
     },
-    // Physical compartment slot on the dispenser (1-5)
+    // Physical compartment slot on the dispenser (1-6)
     slotIndex: {
       type: Number,
       required: true,
       min: 1,
-      max: 5,
+      max: 6,
     },
     // Color for the RGB LED ring on dispenser
     slotColor: {
