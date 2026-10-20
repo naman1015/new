@@ -41,11 +41,43 @@ const int STEPS_PER_COMPARTMENT = STEPS_PER_REV / 6;
 DS3231 rtc;
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
-Stepper motor(
-  STEPS_PER_REV,
-  MOTOR_IN1, MOTOR_IN3,
-  MOTOR_IN2, MOTOR_IN4
-);
+// Direct 8-phase half-step table for 28BYJ-48 + ULN2003 (high torque, reliable on ESP32)
+const int HALF_STEP_SEQ[8][4] = {
+  {1, 0, 0, 0},
+  {1, 1, 0, 0},
+  {0, 1, 0, 0},
+  {0, 1, 1, 0},
+  {0, 0, 1, 0},
+  {0, 0, 1, 1},
+  {0, 0, 0, 1},
+  {1, 0, 0, 1}
+};
+
+void stopMotorCoils() {
+  digitalWrite(MOTOR_IN1, LOW);
+  digitalWrite(MOTOR_IN2, LOW);
+  digitalWrite(MOTOR_IN3, LOW);
+  digitalWrite(MOTOR_IN4, LOW);
+}
+
+// In half-step mode, 1 full revolution of 28BYJ-48 = 4096 half-steps (2048 full steps)
+void stepMotorBy(int fullSteps) {
+  if (fullSteps == 0) return;
+  int halfSteps = abs(fullSteps) * 2;
+  int dir = (fullSteps > 0) ? 1 : -1;
+  static int phase = 0;
+
+  for (int i = 0; i < halfSteps; i++) {
+    phase = (phase + dir + 8) % 8;
+    digitalWrite(MOTOR_IN1, HALF_STEP_SEQ[phase][0]);
+    digitalWrite(MOTOR_IN2, HALF_STEP_SEQ[phase][1]);
+    digitalWrite(MOTOR_IN3, HALF_STEP_SEQ[phase][2]);
+    digitalWrite(MOTOR_IN4, HALF_STEP_SEQ[phase][3]);
+    delay(2); // 2ms per half-step (~4ms per full step) -> maximum torque for 28BYJ-48
+    if (i % 64 == 0) yield(); // Keep ESP32 watchdog happy
+  }
+  stopMotorCoils();
+}
 
 // ---------- MEDICINE SCHEDULES (Editable from Mobile App) ----------
 int MEDICINE_HOURS[6] = {8, 9, 13, 14, 20, 21};
@@ -241,18 +273,19 @@ void openCompartment() {
 
   digitalWrite(GREEN_LED_PIN, LOW);
 
-  // Optional selector movement. Calibrate before enabling.
+  // Move stepper motor to open the selected compartment
   if (ENABLE_MOTOR) {
-    int targetPosition = slot * STEPS_PER_COMPARTMENT;
+    int targetPosition = (slot + 1) * STEPS_PER_COMPARTMENT;
     int movement = targetPosition - currentMotorPosition;
-    motor.step(movement);
-    currentMotorPosition = targetPosition;
-
-    // De-energize stepper coils so motor does not overheat while idle
-    digitalWrite(MOTOR_IN1, LOW);
-    digitalWrite(MOTOR_IN2, LOW);
-    digitalWrite(MOTOR_IN3, LOW);
-    digitalWrite(MOTOR_IN4, LOW);
+    // Always rotate at least 1 compartment step if already at target during repeated tests
+    if (movement == 0) {
+      movement = STEPS_PER_COMPARTMENT;
+    } else if (movement < 0) {
+      movement += STEPS_PER_REV; // Always rotate forward clockwise
+    }
+    Serial.printf("Rotating motor by %d steps for Compartment %d...\n", movement, slot + 1);
+    stepMotorBy(movement);
+    currentMotorPosition = targetPosition % STEPS_PER_REV;
   }
 
   // Start the medicine-taking period.
@@ -349,6 +382,13 @@ void setup() {
   pinMode(IR_PIN, INPUT);
   pinMode(BUZZER_PIN, OUTPUT);
 
+  // Explicitly configure all 4 stepper motor driver pins as OUTPUT
+  pinMode(MOTOR_IN1, OUTPUT);
+  pinMode(MOTOR_IN2, OUTPUT);
+  pinMode(MOTOR_IN3, OUTPUT);
+  pinMode(MOTOR_IN4, OUTPUT);
+  stopMotorCoils();
+
   digitalWrite(GREEN_LED_PIN, LOW);
   digitalWrite(RED_LED_PIN, LOW);
   digitalWrite(BUZZER_PIN, LOW);
@@ -363,8 +403,12 @@ void setup() {
   lcd.setCursor(0, 1);
   lcd.print("Starting...");
 
+  // Quick motor self-test on boot (rotates 1/12th turn forward & back so you see it work immediately)
   if (ENABLE_MOTOR) {
-    motor.setSpeed(8);
+    Serial.println("Testing Stepper Motor on pins 25, 26, 27, 32...");
+    stepMotorBy(170);
+    delay(200);
+    stepMotorBy(-170);
   }
 
   // Connect to WiFi (up to 6s timeout so device still works offline)
