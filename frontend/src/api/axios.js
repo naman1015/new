@@ -7,9 +7,9 @@ const getBaseUrl = () => {
     return clean.endsWith('/api') ? clean : `${clean}/api`;
   }
   if (typeof window !== 'undefined' && window.location.hostname !== 'localhost') {
-    return '/api';
+    return 'https://new-d966.onrender.com/api';
   }
-  return 'http://localhost:5000/api';
+  return 'https://new-d966.onrender.com/api';
 };
 
 const api = axios.create({

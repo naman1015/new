@@ -9,7 +9,7 @@ const char* ssid = "YOUR_WIFI_SSID";
 const char* password = "YOUR_WIFI_PASSWORD";
 
 // Replace with your live Render backend URL once deployed (e.g. "https://smart-medicine-manager-api.onrender.com/api")
-const char* serverUrl = "https://YOUR-RENDER-APP.onrender.com/api";
+const char* serverUrl = "https://new-d966.onrender.com/api";
 const char* deviceId = "DISPENSER_01";
 const char* deviceSecret = "smm_device_secret_key_123";
 

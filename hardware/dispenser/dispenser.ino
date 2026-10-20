@@ -11,7 +11,7 @@
 // ---------- WIFI & APP BACKEND CONFIG ----------
 const char* WIFI_SSID     = "YOUR_WIFI_SSID";
 const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
-const char* SERVER_URL    = "https://YOUR-RENDER-APP.onrender.com/api";
+const char* SERVER_URL    = "https://new-d966.onrender.com/api";
 const char* DEVICE_ID     = "DISPENSER_01";
 const char* DEVICE_SECRET = "smm_device_secret_key_123";
 
