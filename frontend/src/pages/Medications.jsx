@@ -328,34 +328,18 @@ export default function Medications() {
                   value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required />
               </div>
 
-              {/* Slot + Color */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                <div className="form-group">
-                  <label>Dispenser Slot</label>
-                  <select className="input" value={form.slotIndex}
-                    onChange={e => setForm(f => ({ ...f, slotIndex: Number(e.target.value) }))}>
-                    {[1, 2, 3, 4, 5, 6].map(s => (
-                      <option key={s} value={s}
-                        disabled={meds.some(m => m.slotIndex === s && m._id !== editingId)}>
-                        Slot {s}{meds.some(m => m.slotIndex === s && m._id !== editingId) ? ' (used)' : ''}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="form-group">
-                  <label>LED Color</label>
-                  <select className="input" value={form.slotColor}
-                    onChange={e => setForm(f => ({ ...f, slotColor: e.target.value }))}>
-                    {COLORS.map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                </div>
-              </div>
-
-              {/* Color preview */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-                <div style={slotColorStyle(form.slotColor)} />
-                <span>LED light on dispenser will glow <strong style={{ color: `var(--slot-${form.slotColor})` }}>{form.slotColor}</strong></span>
+              {/* Slot */}
+              <div className="form-group">
+                <label>Dispenser Compartment (1 - 6)</label>
+                <select className="input" value={form.slotIndex}
+                  onChange={e => setForm(f => ({ ...f, slotIndex: Number(e.target.value), slotColor: 'red' }))}>
+                  {[1, 2, 3, 4, 5, 6].map(s => (
+                    <option key={s} value={s}
+                      disabled={meds.some(m => m.slotIndex === s && m._id !== editingId)}>
+                      Compartment {s}{meds.some(m => m.slotIndex === s && m._id !== editingId) ? ' (used)' : ''}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               {/* Dosage */}

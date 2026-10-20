@@ -269,36 +269,6 @@ export default function Profile() {
         </div>
       )}
 
-      {/* How-to info */}
-      <div className="card" style={{ padding: '18px 20px', marginBottom: 20, borderWidth: seniorMode ? '2px' : '1px' }}>
-        <h3 style={{ marginBottom: 12, fontSize: seniorMode ? '1.35rem' : '1.1rem' }}>💡 Slot Light Color Guide</h3>
-        <p style={{ fontSize: seniorMode ? '0.95rem' : '0.82rem', marginBottom: 14 }}>
-          Each dispenser slot lights up with a specific color. Keep your pills arranged accordingly.
-        </p>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          {SLOT_COLORS.map(c => (
-            <div key={c} style={{
-              display: 'flex', alignItems: 'center', gap: 8,
-              padding: seniorMode ? '6px 14px' : '4px 10px',
-              borderRadius: 20,
-              background: 'var(--bg-card)',
-              border: seniorMode ? '2px solid var(--border)' : '1px solid var(--border)',
-              fontSize: seniorMode ? '0.95rem' : '0.75rem',
-              fontWeight: 700,
-            }}>
-              <div style={{
-                width: seniorMode ? 14 : 10, 
-                height: seniorMode ? 14 : 10, 
-                borderRadius: '50%',
-                background: `var(--slot-${c})`,
-                boxShadow: `0 0 8px var(--slot-${c})`,
-              }} />
-              <span style={{ textTransform: 'capitalize' }}>{c}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
       {/* Logout */}
       <button 
         className="btn btn-danger btn-full" 
