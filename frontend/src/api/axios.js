@@ -23,14 +23,24 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// Auto logout on 401
+// Auto refresh default session on 401 instead of redirecting to /login
 api.interceptors.response.use(
   (res) => res,
-  (err) => {
-    if (err.response?.status === 401) {
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
-      window.location.href = '/login';
+  async (err) => {
+    const orig = err.config;
+    if (err.response?.status === 401 && orig && !orig._retry && !orig.url?.includes('/auth/')) {
+      orig._retry = true;
+      try {
+        const { data } = await api.get('/auth/default-session');
+        if (data?.token) {
+          localStorage.setItem('token', data.token);
+          localStorage.setItem('user', JSON.stringify(data.user));
+          orig.headers.Authorization = `Bearer ${data.token}`;
+          return api(orig);
+        }
+      } catch {
+        // ignore
+      }
     }
     return Promise.reject(err);
   }

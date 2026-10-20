@@ -11,6 +11,44 @@ const signToken = (id) =>
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',
   });
 
+// GET /api/auth/default-session — auto-login default patient so dashboard opens directly without login wall
+router.get('/default-session', async (req, res) => {
+  try {
+    let user = await User.findOne({ role: 'patient' }).sort({ createdAt: 1 });
+    if (!user) {
+      user = await User.create({
+        name: 'Patient',
+        email: 'patient@dosetrack.local',
+        password: 'password123',
+        role: 'patient',
+      });
+    }
+
+    const Device = require('../models/Device');
+    const device = await Device.findOneAndUpdate(
+      { deviceId: 'DISPENSER_01' },
+      { patient: user._id },
+      { new: true, upsert: true }
+    );
+    await User.findByIdAndUpdate(user._id, { device: device._id });
+
+    const token = signToken(user._id);
+    res.json({
+      token,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        telegramChatId: user.telegramChatId,
+        device: { deviceId: 'DISPENSER_01', isOnline: device.isOnline },
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
 // POST /api/auth/register
 router.post('/register', async (req, res) => {
   try {
