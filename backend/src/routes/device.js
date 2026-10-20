@@ -5,27 +5,49 @@ const { protect, protectDevice, restrictTo } = require('../middleware/auth');
 
 const router = express.Router();
 
-// POST /api/device/heartbeat — ESP32 sends health data every 60s
+// POST /api/device/heartbeat — ESP32 sends health data and receives exact server time sync
 router.post('/heartbeat', protectDevice, async (req, res) => {
   try {
     const { deviceId, wifiStrength, firmwareVersion, uptimeSeconds, freeHeapBytes } = req.body;
+    const now = new Date();
+
+    let updateData = {
+      isOnline: true,
+      lastHeartbeat: {
+        receivedAt: now,
+        wifiStrength,
+        firmwareVersion,
+        uptimeSeconds,
+        freeHeapBytes,
+      },
+    };
+
+    // Auto-link to latest patient if not yet linked so user doesn't get stuck
+    let existing = await Device.findOne({ deviceId });
+    if (!existing || !existing.patient) {
+      const fallbackPatient = await User.findOne({ role: 'patient' }).sort({ createdAt: -1 });
+      if (fallbackPatient) {
+        updateData.patient = fallbackPatient._id;
+      }
+    }
 
     const device = await Device.findOneAndUpdate(
       { deviceId },
-      {
-        isOnline: true,
-        lastHeartbeat: {
-          receivedAt: new Date(),
-          wifiStrength,
-          firmwareVersion,
-          uptimeSeconds,
-          freeHeapBytes,
-        },
-      },
-      { new: true, upsert: true } // create if doesn't exist
+      updateData,
+      { new: true, upsert: true }
     );
 
-    res.json({ message: 'Heartbeat received.', device });
+    if (device.patient) {
+      await User.findByIdAndUpdate(device.patient, { device: device._id });
+    }
+
+    res.json({
+      message: 'Heartbeat received.',
+      serverTimeEpochMs: now.getTime(),
+      serverTimeISO: now.toISOString(),
+      serverTimeIST: now.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false }),
+      device,
+    });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

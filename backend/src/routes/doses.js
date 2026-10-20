@@ -136,28 +136,67 @@ router.post('/trigger', protectDevice, async (req, res) => {
 });
 
 // GET /api/doses/pending?deviceId=xxx
-// ESP32 calls this every 60 seconds to get upcoming doses
+// ESP32 calls this to sync current time and get upcoming scheduled reminder times
 router.get('/pending', protectDevice, async (req, res) => {
   try {
-    const { deviceId } = req.query;
-
-    const Device = require('../models/Device');
-    const device = await Device.findOne({ deviceId });
-    if (!device || !device.patient) {
-      return res.status(404).json({ message: 'Device not linked to a patient.' });
-    }
+    const { deviceId = 'DISPENSER_01' } = req.query;
+    const { patientId } = await resolvePatientAndMed(deviceId, 1);
 
     const now = new Date();
-    // Look 2 minutes ahead — so ESP32 can prepare
-    const windowEnd = new Date(now.getTime() + 2 * 60 * 1000);
+    const serverTimeIST = now.toLocaleTimeString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      hour12: false,
+    });
 
-    const doses = await Dose.find({
-      patient: device.patient,
+    if (!patientId) {
+      return res.json({
+        serverTimeEpochMs: now.getTime(),
+        serverTimeISO: now.toISOString(),
+        serverTimeIST,
+        doses: [],
+        nextDose: null,
+      });
+    }
+
+    // Also mark the device online on poll so connection is instant
+    const Device = require('../models/Device');
+    await Device.findOneAndUpdate(
+      { deviceId },
+      {
+        patient: patientId,
+        isOnline: true,
+        'lastHeartbeat.receivedAt': now,
+      },
+      { upsert: true }
+    );
+
+    const startOfDay = new Date(now);
+    startOfDay.setHours(0, 0, 0, 0);
+
+    const rawDoses = await Dose.find({
+      patient: patientId,
       status: 'pending',
-      scheduledAt: { $gte: now, $lte: windowEnd },
-    }).populate('medication', 'name slotIndex slotColor dosageAmount dosageUnit');
+      scheduledAt: { $gte: new Date(now.getTime() - 10 * 60 * 1000) },
+    })
+      .populate('medication', 'name slotIndex slotColor dosageAmount dosageUnit times')
+      .sort({ scheduledAt: 1 });
 
-    res.json({ doses });
+    const doses = rawDoses.map((d) => {
+      const secondsRemaining = Math.round((new Date(d.scheduledAt).getTime() - now.getTime()) / 1000);
+      return {
+        ...d.toObject(),
+        secondsRemaining,
+        shouldAlertNow: secondsRemaining <= 0 && secondsRemaining >= -600,
+      };
+    });
+
+    res.json({
+      serverTimeEpochMs: now.getTime(),
+      serverTimeISO: now.toISOString(),
+      serverTimeIST,
+      doses,
+      nextDose: doses[0] || null,
+    });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -343,6 +382,97 @@ router.patch('/:id', async (req, res) => {
     if (!dose) return res.status(404).json({ message: 'Dose not found.' });
 
     res.json({ message: 'Dose updated.', dose });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// POST /api/doses/schedule-reminder — set a reminder time or countdown timer from the mobile app
+router.post('/schedule-reminder', async (req, res) => {
+  try {
+    const {
+      medicationId,
+      mode = 'timer', // 'timer' (countdown in seconds) or 'clock' (HH:MM time string)
+      alertInSeconds = 275,
+      clockTime,      // e.g. '14:30'
+      slotIndex = 1,
+    } = req.body;
+
+    const patientId = req.user.role === 'patient' ? req.user._id : (req.body.patientId || req.user._id);
+
+    let medication = medicationId
+      ? await Medication.findById(medicationId)
+      : await Medication.findOne({ patient: patientId, isActive: true }).sort({ slotIndex: 1 });
+
+    if (!medication) {
+      medication = await Medication.create({
+        patient: patientId,
+        addedBy: req.user._id,
+        name: 'Scheduled Medicine',
+        slotIndex: slotIndex || 1,
+        slotColor: 'red',
+        dosageAmount: 1,
+        dosageUnit: 'tablet',
+        times: [clockTime || '09:00'],
+        stockCount: 30,
+        stockAlertThreshold: 5,
+      });
+    }
+
+    let scheduledAt;
+    if (mode === 'clock' && clockTime) {
+      const [h, m] = clockTime.split(':').map(Number);
+      scheduledAt = new Date();
+      scheduledAt.setHours(h, m, 0, 0);
+      // If that time already passed today, schedule for today anyway if within 2 min, else tomorrow
+      if (scheduledAt.getTime() < Date.now() - 60 * 1000) {
+        scheduledAt.setDate(scheduledAt.getDate() + 1);
+      }
+      // Also save this time in medication.times if not already there
+      if (!medication.times.includes(clockTime)) {
+        medication.times.push(clockTime);
+        medication.times.sort();
+        await medication.save();
+      }
+    } else {
+      scheduledAt = new Date(Date.now() + Number(alertInSeconds) * 1000);
+      const timeStr = scheduledAt.toTimeString().slice(0, 5);
+      if (!medication.times.includes(timeStr)) {
+        medication.times = [timeStr];
+        await medication.save();
+      }
+    }
+
+    // Update existing pending dose for this medication or create a new one
+    let dose = await Dose.findOne({
+      patient: patientId,
+      medication: medication._id,
+      status: 'pending',
+    });
+
+    if (dose) {
+      dose.scheduledAt = scheduledAt;
+      await dose.save();
+    } else {
+      dose = await Dose.create({
+        patient: patientId,
+        medication: medication._id,
+        scheduledAt,
+        slotIndex: medication.slotIndex,
+        status: 'pending',
+      });
+    }
+
+    const populated = await Dose.findById(dose._id).populate(
+      'medication',
+      'name slotIndex slotColor dosageAmount dosageUnit times'
+    );
+
+    res.json({
+      message: 'Reminder scheduled and synced to ESP32!',
+      dose: populated,
+      serverTimeEpochMs: Date.now(),
+    });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

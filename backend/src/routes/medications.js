@@ -1,8 +1,55 @@
 const express = require('express');
 const Medication = require('../models/Medication');
-const { protect, restrictTo } = require('../middleware/auth');
+const Dose = require('../models/Dose');
+const { protect } = require('../middleware/auth');
 
 const router = express.Router();
+
+// Helper: synchronize today's pending Dose records whenever a medication's times are created or updated
+async function syncTodayDosesForMedication(medication) {
+  const now = new Date();
+  const todayDay = now.getDay();
+
+  // Remove old future pending doses for this medication today so updated times replace them cleanly
+  const startOfDay = new Date(now);
+  startOfDay.setHours(0, 0, 0, 0);
+  const endOfDay = new Date(now);
+  endOfDay.setHours(23, 59, 59, 999);
+
+  await Dose.deleteMany({
+    medication: medication._id,
+    status: 'pending',
+    scheduledAt: { $gte: startOfDay, $lte: endOfDay },
+  });
+
+  if (!medication.isActive) return;
+  if (medication.daysOfWeek?.length > 0 && !medication.daysOfWeek.includes(todayDay)) return;
+
+  for (const timeStr of medication.times || []) {
+    const [hours, minutes] = timeStr.split(':').map(Number);
+    if (Number.isNaN(hours) || Number.isNaN(minutes)) continue;
+
+    const scheduledAt = new Date(now);
+    scheduledAt.setHours(hours, minutes, 0, 0);
+
+    // Create pending dose for any time today that hasn't passed more than 5 minutes ago
+    if (scheduledAt.getTime() >= now.getTime() - 5 * 60 * 1000) {
+      const alreadyExists = await Dose.findOne({
+        medication: medication._id,
+        scheduledAt,
+      });
+      if (!alreadyExists) {
+        await Dose.create({
+          patient: medication.patient,
+          medication: medication._id,
+          scheduledAt,
+          slotIndex: medication.slotIndex,
+          status: 'pending',
+        });
+      }
+    }
+  }
+}
 
 // All routes require login
 router.use(protect);
@@ -64,6 +111,8 @@ router.post('/', async (req, res) => {
       endDate,
     });
 
+    await syncTodayDosesForMedication(medication);
+
     res.status(201).json({ message: 'Medication added.', medication });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -123,8 +172,8 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// PATCH /api/medications/:id — update a medication
-router.patch('/:id', restrictTo('doctor', 'caretaker', 'admin'), async (req, res) => {
+// PATCH /api/medications/:id — update a medication (including reminder times)
+router.patch('/:id', async (req, res) => {
   try {
     const medication = await Medication.findByIdAndUpdate(
       req.params.id,
@@ -136,6 +185,8 @@ router.patch('/:id', restrictTo('doctor', 'caretaker', 'admin'), async (req, res
       return res.status(404).json({ message: 'Medication not found.' });
     }
 
+    await syncTodayDosesForMedication(medication);
+
     res.json({ message: 'Medication updated.', medication });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -143,9 +194,16 @@ router.patch('/:id', restrictTo('doctor', 'caretaker', 'admin'), async (req, res
 });
 
 // DELETE /api/medications/:id — soft delete
-router.delete('/:id', restrictTo('doctor', 'admin'), async (req, res) => {
+router.delete('/:id', async (req, res) => {
   try {
-    await Medication.findByIdAndUpdate(req.params.id, { isActive: false });
+    const medication = await Medication.findByIdAndUpdate(
+      req.params.id,
+      { isActive: false },
+      { new: true }
+    );
+    if (medication) {
+      await syncTodayDosesForMedication(medication);
+    }
     res.json({ message: 'Medication deactivated.' });
   } catch (err) {
     res.status(500).json({ message: err.message });

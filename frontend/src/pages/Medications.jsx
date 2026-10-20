@@ -24,10 +24,27 @@ export default function Medications() {
   const [meds, setMeds]         = useState([]);
   const [loading, setLoading]   = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [editingId, setEditingId] = useState(null);
   const [form, setForm]         = useState(emptyForm);
   const [saving, setSaving]     = useState(false);
   const [toast, setToast]       = useState(null);
   const [deleting, setDeleting] = useState(null);
+
+  const openEditModal = (med) => {
+    setEditingId(med._id);
+    setForm({
+      name: med.name || '',
+      slotIndex: med.slotIndex || 1,
+      slotColor: med.slotColor || 'blue',
+      dosageAmount: med.dosageAmount || 1,
+      dosageUnit: med.dosageUnit || 'tablet',
+      times: med.times?.length ? [...med.times] : ['08:00'],
+      daysOfWeek: med.daysOfWeek || [],
+      stockCount: med.stockCount ?? 30,
+      notes: med.notes || '',
+    });
+    setShowModal(true);
+  };
 
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type });
@@ -71,13 +88,19 @@ export default function Medications() {
     if (form.times.length === 0) return showToast('Add at least one time.', 'error');
     setSaving(true);
     try {
-      await api.post('/medications', form);
-      showToast('Medication added successfully!');
+      if (editingId) {
+        await api.patch(`/medications/${editingId}`, form);
+        showToast('Reminder times updated & synced to ESP32!');
+      } else {
+        await api.post('/medications', form);
+        showToast('Medication added & synced to ESP32!');
+      }
       setShowModal(false);
+      setEditingId(null);
       setForm(emptyForm);
       fetchMeds();
     } catch (err) {
-      showToast(err.response?.data?.message || 'Failed to add.', 'error');
+      showToast(err.response?.data?.message || 'Failed to save.', 'error');
     } finally {
       setSaving(false);
     }
@@ -201,17 +224,29 @@ export default function Medications() {
                   )}
                   <h3 style={{ fontSize: seniorMode ? '1.45rem' : '1.1rem', fontWeight: 800 }}>{med.name}</h3>
                 </div>
-                <button
-                  className="btn btn-danger"
-                  style={{ 
-                    padding: seniorMode ? '8px 16px' : '4px 10px', 
-                    fontSize: seniorMode ? '0.95rem' : '0.75rem' 
-                  }}
-                  onClick={() => handleDelete(med._id, med.name)}
-                  disabled={deleting === med._id}
-                >
-                  {deleting === med._id ? '...' : 'Remove'}
-                </button>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    className="btn btn-ghost"
+                    style={{
+                      padding: seniorMode ? '8px 14px' : '4px 10px',
+                      fontSize: seniorMode ? '0.95rem' : '0.75rem',
+                    }}
+                    onClick={() => openEditModal(med)}
+                  >
+                    ⏰ Edit Times
+                  </button>
+                  <button
+                    className="btn btn-danger"
+                    style={{ 
+                      padding: seniorMode ? '8px 16px' : '4px 10px', 
+                      fontSize: seniorMode ? '0.95rem' : '0.75rem' 
+                    }}
+                    onClick={() => handleDelete(med._id, med.name)}
+                    disabled={deleting === med._id}
+                  >
+                    {deleting === med._id ? '...' : 'Remove'}
+                  </button>
+                </div>
               </div>
 
               {/* Info grid */}
@@ -278,12 +313,12 @@ export default function Medications() {
         )
       )}
 
-      {/* Add Medication Modal */}
+      {/* Add / Edit Medication Modal */}
       {showModal && (
-        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setShowModal(false)}>
+        <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) { setShowModal(false); setEditingId(null); setForm(emptyForm); } }}>
           <div className="modal" style={{ maxHeight: '85dvh', overflowY: 'auto' }}>
             <div className="modal-handle" />
-            <h2 style={{ marginBottom: 20 }}>Add Medication</h2>
+            <h2 style={{ marginBottom: 20 }}>{editingId ? 'Edit Medicine & Reminder Times' : 'Add Medication'}</h2>
 
             <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               {/* Name */}
@@ -403,11 +438,11 @@ export default function Medications() {
 
               <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
                 <button type="button" className="btn btn-ghost" style={{ flex: 1 }}
-                  onClick={() => { setShowModal(false); setForm(emptyForm); }}>
+                  onClick={() => { setShowModal(false); setEditingId(null); setForm(emptyForm); }}>
                   Cancel
                 </button>
                 <button type="submit" className="btn btn-primary" style={{ flex: 2 }} disabled={saving}>
-                  {saving ? 'Saving...' : 'Add Medication'}
+                  {saving ? 'Saving...' : (editingId ? 'Save Changes' : 'Add Medication')}
                 </button>
               </div>
             </form>

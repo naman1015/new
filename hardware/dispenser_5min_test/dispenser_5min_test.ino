@@ -1,6 +1,8 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
+#include <ArduinoJson.h>
+#include <time.h>
 
 // ─── WIFI & CLOUD BACKEND CONFIGURATION ───────────────────────────
 const char* ssid = "YOUR_WIFI_SSID";
@@ -15,23 +17,42 @@ const char* deviceSecret = "smm_device_secret_key_123";
 #define RED_LED_PIN    4
 #define GREEN_LED_PIN  2
 #define BUZZER_PIN     15
-#define IR_SENSOR_PIN  12   // FC-51 IR obstacle module (usually LOW when movement/hand detected)
+#define IR_SENSOR_PIN  12   // FC-51 IR obstacle module (LOW when movement/hand detected)
 
 // Set to LOW if your IR sensor outputs LOW when hand/movement is detected, or HIGH if active-high
 #define IR_DETECTED_STATE LOW
 
-// ─── 5-MINUTE COUNTER TIMINGS ─────────────────────────────────────
-const unsigned long TOTAL_CYCLE_MS = 5UL * 60UL * 1000UL;          // 5:00 mins (300,000 ms)
-const unsigned long ALERT_START_MS = (4UL * 60UL + 35UL) * 1000UL; // 4:35 mins (275,000 ms)
+// ─── NTP TIME SYNC (IST = UTC + 5:30 = 19800 seconds) ─────────────
+const char* ntpServer = "pool.ntp.org";
+const long  gmtOffset_sec = 19800;
+const int   daylightOffset_sec = 0;
 
-unsigned long cycleStartTime = 0;
+// ─── STATE VARIABLES ──────────────────────────────────────────────
+String activeDoseId = "";
+String activeMedName = "";
 bool alertActive = false;
-bool doseTakenInCycle = false;
-bool cycleReported = false;
-unsigned long lastHeartbeat = 0;
+unsigned long alertStartedAt = 0;
+const unsigned long ALERT_TIMEOUT_MS = 25000UL; // 25s window (e.g. 4:35 -> 5:00) before marking missed
+
+unsigned long lastPollTime = 0;
+const unsigned long POLL_INTERVAL_MS = 4000UL;  // Poll every 4 seconds for real-time sync
+
+unsigned long lastHeartbeatTime = 0;
+const unsigned long HEARTBEAT_INTERVAL_MS = 30000UL; // Heartbeat every 30 seconds
+
+// ─── PRINT CURRENT SYNCED IST CLOCK TIME ──────────────────────────
+String getCurrentSyncedTimeStr() {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    return "Syncing...";
+  }
+  char buf[16];
+  strftime(buf, sizeof(buf), "%H:%M:%S", &timeinfo);
+  return String(buf);
+}
 
 // ─── HELPER: POST JSON TO RENDER BACKEND (HTTP or HTTPS) ──────────
-int postToBackend(const char* endpoint, const String& jsonPayload) {
+int postToBackend(const char* endpoint, const String& jsonPayload, String* responseOut = nullptr) {
   if (WiFi.status() != WL_CONNECTED) return -1;
 
   HTTPClient http;
@@ -41,7 +62,7 @@ int postToBackend(const char* endpoint, const String& jsonPayload) {
   WiFiClient plainClient;
 
   if (fullUrl.startsWith("https://")) {
-    secureClient.setInsecure(); // Skip CA cert check for Render HTTPS
+    secureClient.setInsecure();
     http.begin(secureClient, fullUrl);
   } else {
     http.begin(plainClient, fullUrl);
@@ -51,35 +72,79 @@ int postToBackend(const char* endpoint, const String& jsonPayload) {
   http.addHeader("Authorization", String("Bearer ") + deviceSecret);
 
   int code = http.POST(jsonPayload);
-  Serial.printf("[API] POST %s -> HTTP %d\n", endpoint, code);
+  if (code > 0 && responseOut != nullptr) {
+    *responseOut = http.getString();
+  }
   http.end();
   return code;
 }
 
+// ─── SEND HEARTBEAT & SYNC DEVICE CLOCK ───────────────────────────
 void sendHeartbeat() {
   String payload = "{\"deviceId\":\"" + String(deviceId) +
                    "\",\"wifiStrength\":" + String(WiFi.RSSI()) +
-                   ",\"firmwareVersion\":\"5min-test-1.0\"" +
+                   ",\"firmwareVersion\":\"realtime-sync-2.0\"" +
                    ",\"uptimeSeconds\":" + String(millis() / 1000) +
                    ",\"freeHeapBytes\":" + String(ESP.getFreeHeap()) + "}";
-  postToBackend("/device/heartbeat", payload);
+  String resp;
+  int code = postToBackend("/device/heartbeat", payload, &resp);
+  if (code == 200) {
+    Serial.printf("💚 [Heartbeat] Online | Device IST Clock: %s\n", getCurrentSyncedTimeStr().c_str());
+  }
 }
 
-void startNewFiveMinCycle() {
-  cycleStartTime = millis();
-  alertActive = false;
-  doseTakenInCycle = false;
-  cycleReported = false;
+// ─── POLL UPCOMING REMINDERS SET IN THE MOBILE APP ────────────────
+void pollRemindersFromApp() {
+  if (WiFi.status() != WL_CONNECTED || alertActive) return;
 
-  digitalWrite(RED_LED_PIN, LOW);
-  digitalWrite(GREEN_LED_PIN, LOW);
-  digitalWrite(BUZZER_PIN, LOW);
+  HTTPClient http;
+  String fullUrl = String(serverUrl) + "/doses/pending?deviceId=" + String(deviceId);
 
-  Serial.println("\n⏱️ Starting 5-minute counter (Alert at 4:35)...");
+  WiFiClientSecure secureClient;
+  WiFiClient plainClient;
 
-  // Notify backend so the mobile app immediately shows a live countdown to 4:35 (275s)
-  String payload = "{\"deviceId\":\"" + String(deviceId) + "\",\"alertInSeconds\":275,\"slotIndex\":1}";
-  postToBackend("/doses/trigger", payload);
+  if (fullUrl.startsWith("https://")) {
+    secureClient.setInsecure();
+    http.begin(secureClient, fullUrl);
+  } else {
+    http.begin(plainClient, fullUrl);
+  }
+
+  http.addHeader("Authorization", String("Bearer ") + deviceSecret);
+  int code = http.GET();
+
+  if (code == 200) {
+    String body = http.getString();
+    DynamicJsonDocument doc(2048);
+    if (!deserializeJson(doc, body)) {
+      const char* serverIST = doc["serverTimeIST"] | "";
+      JsonObject nextDose = doc["nextDose"];
+
+      if (!nextDose.isNull()) {
+        String doseId = nextDose["_id"].as<String>();
+        String medName = nextDose["medication"]["name"] | "Medicine";
+        long secondsRemaining = nextDose["secondsRemaining"] | 9999;
+
+        Serial.printf("🕒 [Time: %s] Next Reminder: %s in %lds\n",
+                      serverIST, medName.c_str(), secondsRemaining);
+
+        // When reminder time is reached (or within alert window): Turn ON Red LED & Buzzer!
+        if (secondsRemaining <= 0) {
+          activeDoseId = doseId;
+          activeMedName = medName;
+          alertActive = true;
+          alertStartedAt = millis();
+
+          digitalWrite(GREEN_LED_PIN, LOW);
+          digitalWrite(RED_LED_PIN, HIGH);
+          digitalWrite(BUZZER_PIN, HIGH);
+          Serial.printf("🚨 REMINDER DUE (%s)! Red LED & Buzzer ON — Waiting for IR movement...\n",
+                        activeMedName.c_str());
+        }
+      }
+    }
+  }
+  http.end();
 }
 
 void setup() {
@@ -94,6 +159,7 @@ void setup() {
   digitalWrite(GREEN_LED_PIN, LOW);
   digitalWrite(BUZZER_PIN, LOW);
 
+  // 1. Connect to WiFi
   Serial.printf("Connecting to WiFi: %s", ssid);
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
@@ -102,37 +168,36 @@ void setup() {
   }
   Serial.println("\n📶 WiFi Connected! IP: " + WiFi.localIP().toString());
 
+  // 2. Sync ESP32 internal clock to real-world IST time immediately
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  Serial.println("⏱️ Synced ESP32 Time (IST): " + getCurrentSyncedTimeStr());
+
+  // 3. Register online status & check reminders set in the app
   sendHeartbeat();
-  startNewFiveMinCycle();
+  pollRemindersFromApp();
 }
 
 void loop() {
   unsigned long now = millis();
-  unsigned long elapsed = now - cycleStartTime;
 
-  // Send device heartbeat every 60 seconds so Profile page shows "🟢 Connected / Online"
-  if (now - lastHeartbeat >= 60000UL) {
-    lastHeartbeat = now;
+  // Keep ESP32 online status & time synced with the app
+  if (now - lastHeartbeatTime >= HEARTBEAT_INTERVAL_MS) {
+    lastHeartbeatTime = now;
     sendHeartbeat();
   }
 
-  // 1. At 4:35 (275,000 ms): Turn ON Red LED & Buzzer (if not already taken)
-  if (!doseTakenInCycle && !alertActive && elapsed >= ALERT_START_MS && elapsed < TOTAL_CYCLE_MS) {
-    alertActive = true;
-    digitalWrite(RED_LED_PIN, HIGH);
-    digitalWrite(GREEN_LED_PIN, LOW);
-    digitalWrite(BUZZER_PIN, HIGH);
-    Serial.println("🚨 4:35 reached! Red LED & Buzzer ON — Waiting for IR sensor movement...");
+  // Poll the app every 4 seconds for any new/updated reminder times
+  if (!alertActive && (now - lastPollTime >= POLL_INTERVAL_MS)) {
+    lastPollTime = now;
+    pollRemindersFromApp();
   }
 
-  // 2. While alert is active (between 4:35 and 5:00): Monitor IR sensor for movement
-  if (alertActive && !doseTakenInCycle) {
+  // When Red LED & Buzzer are ON, watch the IR sensor continuously for movement
+  if (alertActive) {
     if (digitalRead(IR_SENSOR_PIN) == IR_DETECTED_STATE) {
-      delay(80); // Small debounce
+      delay(60); // Debounce
       if (digitalRead(IR_SENSOR_PIN) == IR_DETECTED_STATE) {
-        doseTakenInCycle = true;
         alertActive = false;
-        cycleReported = true;
 
         // Turn OFF Buzzer & Red LED, Turn ON Green LED
         digitalWrite(BUZZER_PIN, LOW);
@@ -140,28 +205,26 @@ void loop() {
         digitalWrite(GREEN_LED_PIN, HIGH);
         Serial.println("✅ IR Movement Detected! Buzzer OFF, Green LED ON.");
 
-        // Immediately update the mobile app in real time
-        String payload = "{\"deviceId\":\"" + String(deviceId) + "\",\"slotIndex\":1}";
+        // Immediately mark dose as TAKEN in the mobile app
+        String payload = "{\"doseId\":\"" + activeDoseId + "\",\"deviceId\":\"" + String(deviceId) + "\"}";
         postToBackend("/doses/taken", payload);
-      }
-    }
-  }
 
-  // 3. At 5:00 (300,000 ms): If no IR movement was detected, mark as missed & restart or finish
-  if (elapsed >= TOTAL_CYCLE_MS) {
-    if (!doseTakenInCycle && !cycleReported) {
-      cycleReported = true;
+        // Keep Green LED glowing for 5 seconds, then reset for next reminder
+        delay(5000);
+        digitalWrite(GREEN_LED_PIN, LOW);
+        activeDoseId = "";
+      }
+    } else if (now - alertStartedAt >= ALERT_TIMEOUT_MS) {
+      // If no movement detected within 25 seconds (e.g. 4:35 -> 5:00), mark as MISSED
+      alertActive = false;
       digitalWrite(BUZZER_PIN, LOW);
       digitalWrite(RED_LED_PIN, LOW);
-      Serial.println("⚠️ 5:00 reached without IR movement — Marking dose as MISSED.");
+      Serial.println("⚠️ No IR movement detected within window — Marking dose as MISSED.");
 
-      String payload = "{\"deviceId\":\"" + String(deviceId) + "\",\"slotIndex\":1}";
+      String payload = "{\"doseId\":\"" + activeDoseId + "\",\"deviceId\":\"" + String(deviceId) + "\"}";
       postToBackend("/doses/missed", payload);
+      activeDoseId = "";
     }
-
-    // Wait 5 seconds, then start the next 5-minute test cycle
-    delay(5000);
-    startNewFiveMinCycle();
   }
 
   delay(20);
