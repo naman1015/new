@@ -42,4 +42,10 @@ const deviceSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-module.exports = mongoose.model('Device', deviceSchema);
+const { createHybridModel } = require('../services/localStore');
+
+module.exports = createHybridModel(
+  mongoose.model('Device', deviceSchema),
+  'devices',
+  { patient: null, lastHeartbeat: {}, isOnline: false, isActive: true }
+);

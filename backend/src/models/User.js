@@ -64,4 +64,10 @@ userSchema.methods.comparePassword = async function (candidatePassword) {
   return bcrypt.compare(candidatePassword, this.password);
 };
 
-module.exports = mongoose.model('User', userSchema);
+const { createHybridModel } = require('../services/localStore');
+
+module.exports = createHybridModel(
+  mongoose.model('User', userSchema),
+  'users',
+  { role: 'patient', telegramChatId: null, linkedPatients: [], device: null, isActive: true }
+);

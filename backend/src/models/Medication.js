@@ -86,4 +86,21 @@ const medicationSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-module.exports = mongoose.model('Medication', medicationSchema);
+const { createHybridModel } = require('../services/localStore');
+
+module.exports = createHybridModel(
+  mongoose.model('Medication', medicationSchema),
+  'medications',
+  {
+    slotIndex: 1,
+    slotColor: 'red',
+    dosageAmount: 1,
+    dosageUnit: 'tablet',
+    times: ['08:00'],
+    daysOfWeek: [],
+    stockCount: 30,
+    stockAlertThreshold: 5,
+    notes: '',
+    isActive: true,
+  }
+);

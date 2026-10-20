@@ -1,9 +1,17 @@
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '../.env') });
+const fs = require('fs');
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const cron = require('node-cron');
 
+// Safe defaults so cloud deployments work even if env vars aren't configured yet
+process.env.JWT_SECRET = process.env.JWT_SECRET || 'smm_jwt_secret_change_me_in_production';
+process.env.JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
+process.env.DEVICE_SECRET = process.env.DEVICE_SECRET || 'smm_device_secret_key_123';
+
+const { setUseFallback } = require('./services/localStore');
 const authRoutes = require('./routes/auth');
 const medicationRoutes = require('./routes/medications');
 const doseRoutes = require('./routes/doses');
@@ -35,7 +43,7 @@ app.use('/api/doses', doseRoutes);
 app.use('/api/device', deviceRoutes);
 
 // Health check endpoint
-app.get('/', (req, res) => {
+app.get('/api/health', (req, res) => {
   res.json({
     message: '💊 Smart Medicine Manager API is running.',
     version: '1.0.0',
@@ -43,27 +51,49 @@ app.get('/', (req, res) => {
   });
 });
 
+// Serve built React frontend if available (allows single-URL deployment too)
+const frontendDist = path.join(__dirname, '../../frontend/dist');
+if (fs.existsSync(frontendDist)) {
+  app.use(express.static(frontendDist));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api')) return next();
+    res.sendFile(path.join(frontendDist, 'index.html'));
+  });
+} else {
+  app.get('/', (req, res) => {
+    res.json({
+      message: '💊 Smart Medicine Manager API is running.',
+      version: '1.0.0',
+      timestamp: new Date().toISOString(),
+    });
+  });
+}
+
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({ message: 'Route not found.' });
 });
 
-// ─── MongoDB Connection ───────────────────────────────────────────
-mongoose
-  .connect(process.env.MONGO_URI, {
-    serverSelectionTimeoutMS: 5000, // Timeout after 5s instead of hanging
-  })
-  .then(() => {
-    console.log('✅ Connected to MongoDB Atlas.');
-    startServer();
-  })
-  .catch((err) => {
-    console.error('❌ MongoDB connection error:', err.message);
-    console.error('\n💡 HINT: If you are using MongoDB Atlas, make sure your IP is whitelisted under Network Access.');
-    console.error('Your current public IPv6 is: 2402:3a80:1396:cc2:9bc2:2dd8:af56:38e');
-    console.error('You can add either this specific IP or "::/0" (to allow IPv6 from anywhere) in Atlas Network Access.\n');
-    process.exit(1);
-  });
+// ─── Database Connection (MongoDB Atlas with Built-in Fallback) ───
+async function bootstrap() {
+  if (process.env.MONGO_URI) {
+    try {
+      await mongoose.connect(process.env.MONGO_URI, {
+        serverSelectionTimeoutMS: 5000,
+      });
+      console.log('✅ Connected to MongoDB Atlas.');
+    } catch (err) {
+      console.warn('⚠️ MongoDB Atlas unreachable (' + err.message + '). Switching to built-in persistent store.');
+      setUseFallback(true);
+    }
+  } else {
+    console.log('ℹ️ No MONGO_URI set. Using built-in persistent store.');
+    setUseFallback(true);
+  }
+  startServer();
+}
+
+bootstrap();
 
 // ─── Cron Jobs ───────────────────────────────────────────────────
 
@@ -188,7 +218,7 @@ cron.schedule('*/2 * * * *', async () => {
 });
 
 // ─── Start Server ─────────────────────────────────────────────────
-const startServer = () => {
+function startServer() {
   // Init Telegram bot
   initTelegram();
 

@@ -1,0 +1,13 @@
+{
+  "name": "smart-medicine-manager",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "install-all": "npm --prefix backend install && npm --prefix frontend install --legacy-peer-deps",
+    "build": "npm --prefix backend install && npm --prefix frontend install --legacy-peer-deps && npm --prefix frontend run build",
+    "start": "node backend/src/index.js"
+  }
+}

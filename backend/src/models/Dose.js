@@ -56,4 +56,10 @@ const doseSchema = new mongoose.Schema(
 doseSchema.index({ patient: 1, scheduledAt: -1 });
 doseSchema.index({ status: 1, scheduledAt: 1 });
 
-module.exports = mongoose.model('Dose', doseSchema);
+const { createHybridModel } = require('../services/localStore');
+
+module.exports = createHybridModel(
+  mongoose.model('Dose', doseSchema),
+  'doses',
+  { status: 'pending', verifiedByHardware: false, slotIndex: 1, notes: '', alertSent: false }
+);
