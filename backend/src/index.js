@@ -51,8 +51,12 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Serve built React frontend if available (allows single-URL deployment too)
-const frontendDist = path.join(__dirname, '../../frontend/dist');
+// Serve built React frontend if available (works whether Root Dir is backend/ or repo root)
+const backendPublic = path.join(__dirname, '../public');
+const frontendDist = fs.existsSync(backendPublic)
+  ? backendPublic
+  : path.join(__dirname, '../../frontend/dist');
+
 if (fs.existsSync(frontendDist)) {
   app.use(express.static(frontendDist));
   app.get('*', (req, res, next) => {
