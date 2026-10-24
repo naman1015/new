@@ -25,7 +25,15 @@ router.post('/heartbeat', protectDevice, async (req, res) => {
     // Auto-link to latest patient if not yet linked so user doesn't get stuck
     let existing = await Device.findOne({ deviceId });
     if (!existing || !existing.patient) {
-      const fallbackPatient = await User.findOne({ role: 'patient' }).sort({ createdAt: -1 });
+      let fallbackPatient = await User.findOne({ role: 'patient' }).sort({ createdAt: 1 });
+      if (!fallbackPatient) {
+        fallbackPatient = await User.create({
+          name: 'Patient',
+          email: 'patient@dosetrack.local',
+          password: 'password123',
+          role: 'patient',
+        });
+      }
       if (fallbackPatient) {
         updateData.patient = fallbackPatient._id;
       }

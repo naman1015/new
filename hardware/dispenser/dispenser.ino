@@ -173,7 +173,13 @@ void reportDoseToApp(int slotIndex, bool taken) {
 }
 
 void syncScheduleFromApp() {
-  if (WiFi.status() != WL_CONNECTED || activeCompartment != -1) return;
+  if (activeCompartment != -1) return;
+  if (WiFi.status() != WL_CONNECTED) {
+    if (strlen(WIFI_SSID) > 0 && strcmp(WIFI_SSID, "YOUR_WIFI_SSID") != 0) {
+      WiFi.reconnect();
+    }
+    return;
+  }
 
   HTTPClient http;
   String url = String(SERVER_URL) + "/doses/pending?deviceId=" + String(DEVICE_ID);
@@ -411,19 +417,46 @@ void setup() {
     stepMotorBy(-170);
   }
 
-  // Connect to WiFi (up to 6s timeout so device still works offline)
+  // Connect to WiFi (up to 15s timeout so device still works offline)
   if (strlen(WIFI_SSID) > 0 && strcmp(WIFI_SSID, "YOUR_WIFI_SSID") != 0) {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Connecting WiFi");
+    lcd.setCursor(0, 1);
+    lcd.print(WIFI_SSID);
+    WiFi.mode(WIFI_STA);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     unsigned long wifiStart = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - wifiStart < 6000) {
+    while (WiFi.status() != WL_CONNECTED && millis() - wifiStart < 15000) {
       delay(250);
       Serial.print(".");
     }
     if (WiFi.status() == WL_CONNECTED) {
       Serial.println("\nWiFi Connected!");
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("WiFi Connected!");
+      lcd.setCursor(0, 1);
+      lcd.print("Syncing App...");
       syncRTCWithNetworkTime();
       syncScheduleFromApp();
+    } else {
+      Serial.println("\nWiFi Failed - Check SSID/Password");
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("WiFi Failed!");
+      lcd.setCursor(0, 1);
+      lcd.print("Check SSID/Pass");
+      delay(2000);
     }
+  } else {
+    Serial.println("WARNING: WIFI_SSID is still set to YOUR_WIFI_SSID!");
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Set WIFI_SSID in");
+    lcd.setCursor(0, 1);
+    lcd.print("dispenser.ino!");
+    delay(2500);
   }
 
   delay(1000);

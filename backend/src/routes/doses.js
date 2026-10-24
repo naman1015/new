@@ -22,13 +22,20 @@ async function resolvePatientAndMed(deviceId, slotIndex = 1) {
   let patientId = device?.patient;
 
   if (!patientId) {
-    const fallbackPatient = await User.findOne({ role: 'patient' }).sort({ createdAt: -1 });
-    if (!fallbackPatient) return { patientId: null, medication: null };
+    let fallbackPatient = await User.findOne({ role: 'patient' }).sort({ createdAt: 1 });
+    if (!fallbackPatient) {
+      fallbackPatient = await User.create({
+        name: 'Patient',
+        email: 'patient@dosetrack.local',
+        password: 'password123',
+        role: 'patient',
+      });
+    }
     patientId = fallbackPatient._id;
     if (deviceId) {
       device = await Device.findOneAndUpdate(
         { deviceId },
-        { patient: patientId, isOnline: true },
+        { patient: patientId, isOnline: true, 'lastHeartbeat.receivedAt': new Date() },
         { new: true, upsert: true }
       );
       await User.findByIdAndUpdate(patientId, { device: device._id });
