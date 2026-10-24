@@ -5,11 +5,13 @@ import { useSeniorMode } from '../context/SeniorModeContext';
 
 const filters = ['all', 'pending', 'taken', 'missed', 'skipped'];
 
+const getISTDateStr = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+
 export default function Doses() {
   const { seniorMode } = useSeniorMode();
   const [doses, setDoses] = useState([]);
   const [filter, setFilter] = useState('all');
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [date, setDate] = useState(getISTDateStr());
   const [loading, setLoading] = useState(true);
 
   const fetchDoses = useCallback(async (silent = false) => {
@@ -46,7 +48,7 @@ export default function Doses() {
           className="input"
           value={date}
           onChange={e => setDate(e.target.value)}
-          max={new Date().toISOString().split('T')[0]}
+          max={getISTDateStr()}
         />
       </div>
 

@@ -2,11 +2,19 @@ const express = require('express');
 const Dose = require('../models/Dose');
 const Medication = require('../models/Medication');
 const User = require('../models/User');
+const Device = require('../models/Device');
 const { protect, protectDevice } = require('../middleware/auth');
 const {
   sendDoseTakenAlert,
   sendDoseMissedAlert,
 } = require('../services/telegram');
+const {
+  IST_TIMEZONE,
+  getISTParts,
+  getISTDateForClockTime,
+  getISTDayBounds,
+  formatISTTime,
+} = require('../utils/time');
 
 const router = express.Router();
 
@@ -15,127 +23,150 @@ const router = express.Router();
 // Auth: Bearer DEVICE_SECRET
 // ─────────────────────────────────────────────────────────────────
 
-// Helper: find or create a patient + medication + pending dose for a hardware device
-async function resolvePatientAndMed(deviceId, slotIndex = 1) {
-  const Device = require('../models/Device');
-  let device = deviceId ? await Device.findOne({ deviceId }) : null;
-  let patientId = device?.patient;
-
-  if (!patientId) {
-    let fallbackPatient = await User.findOne({ role: 'patient' }).sort({ createdAt: 1 });
-    if (!fallbackPatient) {
-      fallbackPatient = await User.create({
-        name: 'Patient',
-        email: 'patient@dosetrack.local',
-        password: 'password123',
-        role: 'patient',
-      });
-    }
-    patientId = fallbackPatient._id;
-    if (deviceId) {
-      device = await Device.findOneAndUpdate(
-        { deviceId },
-        { patient: patientId, isOnline: true, 'lastHeartbeat.receivedAt': new Date() },
-        { new: true, upsert: true }
-      );
-      await User.findByIdAndUpdate(patientId, { device: device._id });
-    }
+// Helper: resolve patient linked to a hardware deviceId
+async function resolvePatientForDevice(deviceId) {
+  if (!deviceId) return null;
+  let device = await Device.findOne({ deviceId });
+  if (device?.patient) {
+    return device.patient;
   }
 
-  let medication = await Medication.findOne({
-    patient: patientId,
-    isActive: true,
-    ...(slotIndex ? { slotIndex } : {}),
-  });
-
-  if (!medication) {
-    medication = await Medication.findOne({ patient: patientId, isActive: true });
-  }
-
-  if (!medication) {
-    medication = await Medication.create({
-      patient: patientId,
-      addedBy: patientId,
-      name: 'Scheduled Medicine',
-      slotIndex: slotIndex || 1,
-      slotColor: 'red',
-      dosageAmount: 1,
-      dosageUnit: 'tablet',
-      times: ['09:00'],
-      stockCount: 30,
-      stockAlertThreshold: 5,
+  let fallbackPatient = await User.findOne({ role: 'patient' }).sort({ createdAt: 1 });
+  if (!fallbackPatient) {
+    fallbackPatient = await User.create({
+      name: 'Patient',
+      email: 'patient@dosetrack.local',
+      password: 'password123',
+      role: 'patient',
     });
   }
 
-  return { patientId, medication };
+  device = await Device.findOneAndUpdate(
+    { deviceId },
+    {
+      patient: fallbackPatient._id,
+      isOnline: true,
+      'lastHeartbeat.receivedAt': new Date(),
+    },
+    { new: true, upsert: true }
+  );
+  await User.findByIdAndUpdate(fallbackPatient._id, { device: device._id });
+  return fallbackPatient._id;
 }
 
+/**
+ * Strictly resolve a uniquely identified pending Dose for hardware taken/missed reporting.
+ * Never fabricates a dose or guesses a dose from a different slot.
+ */
 async function resolveDoseForHardware({ doseId, deviceId, slotIndex }) {
+  const parsedSlot = slotIndex !== undefined && slotIndex !== null ? Number(slotIndex) : null;
+
+  let expectedPatientId = null;
+  if (deviceId) {
+    const device = await Device.findOne({ deviceId });
+    if (device?.patient) {
+      expectedPatientId = String(device.patient);
+    }
+  }
+
+  // 1. If doseId is explicitly provided, it must match an existing pending dose
   if (doseId) {
     const existing = await Dose.findById(doseId).populate('medication patient');
-    if (existing) return existing;
+    if (!existing) {
+      return { error: 'Scheduled dose not found for provided doseId.', statusCode: 404 };
+    }
+    if (existing.status !== 'pending') {
+      return { error: `Dose ${doseId} is already marked as '${existing.status}'.`, statusCode: 409 };
+    }
+    const dosePatientId = String(existing.patient?._id || existing.patient);
+    if (expectedPatientId && dosePatientId !== expectedPatientId) {
+      return { error: 'Dose does not belong to the patient linked to this device.', statusCode: 403 };
+    }
+    if (parsedSlot !== null && Number(existing.slotIndex) !== parsedSlot) {
+      return { error: `Dose slotIndex (${existing.slotIndex}) does not match reported slotIndex (${parsedSlot}).`, statusCode: 409 };
+    }
+    return { dose: existing };
   }
 
-  const { patientId, medication } = await resolvePatientAndMed(deviceId, slotIndex);
-  if (!patientId || !medication) return null;
+  // 2. Without doseId, both deviceId and a valid slotIndex are required to identify a due dose
+  if (!deviceId || parsedSlot === null || Number.isNaN(parsedSlot)) {
+    return {
+      error: 'Either doseId or both deviceId and slotIndex are required to uniquely identify a scheduled dose.',
+      statusCode: 400,
+    };
+  }
 
-  let dose = await Dose.findOne({
-    patient: patientId,
+  if (!expectedPatientId) {
+    return { error: `Device '${deviceId}' is not linked to a patient.`, statusCode: 404 };
+  }
+
+  const now = new Date();
+  const windowStart = new Date(now.getTime() - 15 * 60 * 1000); // up to 15 min after scheduled time
+  const windowEnd = new Date(now.getTime() + 2 * 60 * 1000);    // up to 2 min before scheduled time
+
+  const matchingDoses = await Dose.find({
+    patient: expectedPatientId,
+    slotIndex: parsedSlot,
     status: 'pending',
+    scheduledAt: { $gte: windowStart, $lte: windowEnd },
   })
-    .sort({ scheduledAt: 1 })
-    .populate('medication patient');
+    .populate('medication patient')
+    .sort({ scheduledAt: 1 });
 
-  if (!dose) {
-    const created = await Dose.create({
-      patient: patientId,
-      medication: medication._id,
-      scheduledAt: new Date(),
-      slotIndex: medication.slotIndex || 1,
-      status: 'pending',
-    });
-    dose = await Dose.findById(created._id).populate('medication patient');
+  if (matchingDoses.length === 0) {
+    return {
+      error: `No active pending scheduled dose found for compartment ${parsedSlot} within the current due window.`,
+      statusCode: 404,
+    };
   }
 
-  return dose;
+  if (matchingDoses.length > 1) {
+    return {
+      error: `Multiple pending doses found for compartment ${parsedSlot}. Provide doseId to uniquely identify the dose.`,
+      statusCode: 409,
+    };
+  }
+
+  return { dose: matchingDoses[0] };
 }
 
 // POST /api/doses/trigger
-// ESP32 can call this when starting its 5-minute test counter so the mobile app
-// immediately displays the upcoming dose and live countdown timer
+// ESP32 or test harness can call this to trigger a countdown dose for an existing medication slot
 router.post('/trigger', protectDevice, async (req, res) => {
   try {
     const { deviceId = 'DISPENSER_01', alertInSeconds = 275, slotIndex = 1 } = req.body;
-    const { patientId, medication } = await resolvePatientAndMed(deviceId, slotIndex);
+    const patientId = await resolvePatientForDevice(deviceId);
 
-    if (!patientId || !medication) {
+    if (!patientId) {
       return res.status(404).json({ message: 'No patient found. Please register in the app first.' });
+    }
+
+    const medication = await Medication.findOne({
+      patient: patientId,
+      slotIndex: Number(slotIndex),
+      isActive: true,
+    });
+
+    if (!medication) {
+      return res.status(404).json({
+        message: `No active medication configured for compartment ${slotIndex}.`,
+      });
     }
 
     const scheduledAt = new Date(Date.now() + Number(alertInSeconds) * 1000);
 
-    // Reuse an existing pending dose or create a fresh one for this cycle
-    let dose = await Dose.findOne({
+    const dose = await Dose.create({
       patient: patientId,
+      medication: medication._id,
+      scheduledAt,
+      slotIndex: medication.slotIndex,
       status: 'pending',
-    }).sort({ scheduledAt: -1 });
+    });
 
-    if (dose) {
-      dose.scheduledAt = scheduledAt;
-      dose.medication = medication._id;
-      dose.slotIndex = medication.slotIndex;
-      await dose.save();
-    } else {
-      dose = await Dose.create({
-        patient: patientId,
-        medication: medication._id,
-        scheduledAt,
-        slotIndex: medication.slotIndex,
-        status: 'pending',
-      });
-    }
-
-    const populated = await Dose.findById(dose._id).populate('medication', 'name slotIndex slotColor dosageAmount dosageUnit');
+    const populated = await Dose.findById(dose._id).populate(
+      'medication',
+      'name slotIndex slotColor dosageAmount dosageUnit'
+    );
     res.json({ message: 'Timer dose triggered.', dose: populated });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -143,30 +174,28 @@ router.post('/trigger', protectDevice, async (req, res) => {
 });
 
 // GET /api/doses/pending?deviceId=xxx
-// ESP32 calls this to sync current time and get upcoming scheduled reminder times
+// ESP32 calls this every 5 seconds to sync current time and get ALL daily reminder times per medicine
 router.get('/pending', protectDevice, async (req, res) => {
   try {
     const { deviceId = 'DISPENSER_01' } = req.query;
-    const { patientId } = await resolvePatientAndMed(deviceId, 1);
+    const patientId = await resolvePatientForDevice(deviceId);
 
     const now = new Date();
-    const serverTimeIST = now.toLocaleTimeString('en-IN', {
-      timeZone: 'Asia/Kolkata',
-      hour12: false,
-    });
+    const { dayOfWeek: todayIST, timeStrWithSeconds: serverTimeIST } = getISTParts(now);
 
     if (!patientId) {
       return res.json({
+        timezone: IST_TIMEZONE,
         serverTimeEpochMs: now.getTime(),
         serverTimeISO: now.toISOString(),
         serverTimeIST,
+        slotSchedule: [],
         doses: [],
         nextDose: null,
       });
     }
 
-    // Also mark the device online on poll so connection is instant
-    const Device = require('../models/Device');
+    // Mark the device online on poll
     await Device.findOneAndUpdate(
       { deviceId },
       {
@@ -177,8 +206,56 @@ router.get('/pending', protectDevice, async (req, res) => {
       { upsert: true }
     );
 
-    const startOfDay = new Date(now);
-    startOfDay.setHours(0, 0, 0, 0);
+    const activeMeds = await Medication.find({ patient: patientId, isActive: true }).sort({ slotIndex: 1 });
+
+    // Build full schedule across ALL times for each active medication scheduled today in Asia/Kolkata
+    const slotSchedule = [];
+    const inFiveMinutes = new Date(now.getTime() + 5 * 60 * 1000);
+
+    for (const med of activeMeds) {
+      if (
+        Array.isArray(med.daysOfWeek) &&
+        med.daysOfWeek.length > 0 &&
+        !med.daysOfWeek.includes(todayIST)
+      ) {
+        continue;
+      }
+
+      const timesList = Array.isArray(med.times) ? med.times : [];
+      for (const timeStr of timesList) {
+        const [h, min] = String(timeStr).split(':').map(Number);
+        if (Number.isNaN(h) || Number.isNaN(min)) continue;
+
+        slotSchedule.push({
+          slotIndex: med.slotIndex,
+          hour: h,
+          minute: min,
+          time: `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`,
+          medicationId: med._id,
+          name: med.name,
+        });
+
+        // Ensure a pending Dose document exists if this reminder time is due within [-1 min, +5 min] in Asia/Kolkata
+        const scheduledAt = getISTDateForClockTime(timeStr, now);
+        if (scheduledAt >= new Date(now.getTime() - 60 * 1000) && scheduledAt <= inFiveMinutes) {
+          const exists = await Dose.findOne({
+            medication: med._id,
+            scheduledAt,
+          });
+          if (!exists) {
+            await Dose.create({
+              patient: patientId,
+              medication: med._id,
+              scheduledAt,
+              slotIndex: med.slotIndex,
+              status: 'pending',
+            });
+          }
+        }
+      }
+    }
+
+    slotSchedule.sort((a, b) => a.slotIndex - b.slotIndex || a.hour - b.hour || a.minute - b.minute);
 
     const rawDoses = await Dose.find({
       patient: patientId,
@@ -192,25 +269,14 @@ router.get('/pending', protectDevice, async (req, res) => {
       const secondsRemaining = Math.round((new Date(d.scheduledAt).getTime() - now.getTime()) / 1000);
       return {
         ...d.toObject(),
+        scheduledTimeIST: formatISTTime(d.scheduledAt, false),
         secondsRemaining,
         shouldAlertNow: secondsRemaining <= 0 && secondsRemaining >= -600,
       };
     });
 
-    const activeMeds = await Medication.find({ patient: patientId, isActive: true }).sort({ slotIndex: 1 });
-    const slotSchedule = activeMeds
-      .filter((m) => m.times && m.times.length > 0)
-      .map((m) => {
-        const [h, min] = m.times[0].split(':').map(Number);
-        return {
-          slotIndex: m.slotIndex,
-          hour: Number.isNaN(h) ? 8 : h,
-          minute: Number.isNaN(min) ? 0 : min,
-          name: m.name,
-        };
-      });
-
     res.json({
+      timezone: IST_TIMEZONE,
       serverTimeEpochMs: now.getTime(),
       serverTimeISO: now.toISOString(),
       serverTimeIST,
@@ -224,14 +290,19 @@ router.get('/pending', protectDevice, async (req, res) => {
 });
 
 // POST /api/doses/taken
-// ESP32 calls this when IR sensor confirms pill pickup (works with doseId OR just deviceId)
+// ESP32 calls this when IR sensor confirms pill pickup; requires unique dose identification
 router.post('/taken', protectDevice, async (req, res) => {
   try {
-    const { doseId, deviceId = 'DISPENSER_01', slotIndex } = req.body;
+    const { doseId, deviceId, slotIndex } = req.body;
 
-    const dose = await resolveDoseForHardware({ doseId, deviceId, slotIndex });
-    if (!dose) {
-      return res.status(404).json({ message: 'Dose or patient not found.' });
+    const { dose, error, statusCode } = await resolveDoseForHardware({
+      doseId,
+      deviceId,
+      slotIndex,
+    });
+
+    if (error || !dose) {
+      return res.status(statusCode || 404).json({ message: error || 'Scheduled dose not found.' });
     }
 
     dose.status = 'taken';
@@ -240,36 +311,39 @@ router.post('/taken', protectDevice, async (req, res) => {
     await dose.save();
 
     // Decrease stock count
-    await Medication.findByIdAndUpdate(dose.medication._id, {
-      $inc: { stockCount: -1 },
-    });
-
-    // Send Telegram alert to caretakers
-    const patient = await User.findById(dose.patient._id).populate('linkedPatients');
-
-    // Notify the patient themselves if they have Telegram
-    if (patient.telegramChatId) {
-      await sendDoseTakenAlert(
-        patient.telegramChatId,
-        patient.name,
-        dose.medication.name,
-        new Date(dose.takenAt).toLocaleTimeString('en-IN')
-      );
+    if (dose.medication?._id) {
+      await Medication.findByIdAndUpdate(dose.medication._id, {
+        $inc: { stockCount: -1 },
+      });
     }
 
-    // Notify all linked caretakers/doctors
-    const caretakers = await User.find({
-      linkedPatients: patient._id,
-      telegramChatId: { $ne: null },
-    });
+    const takenTimeIST = formatISTTime(dose.takenAt, true);
 
-    for (const caretaker of caretakers) {
-      await sendDoseTakenAlert(
-        caretaker.telegramChatId,
-        patient.name,
-        dose.medication.name,
-        new Date(dose.takenAt).toLocaleTimeString('en-IN')
-      );
+    // Send Telegram alert to patient & caretakers
+    const patient = await User.findById(dose.patient._id || dose.patient).populate('linkedPatients');
+    if (patient) {
+      if (patient.telegramChatId) {
+        await sendDoseTakenAlert(
+          patient.telegramChatId,
+          patient.name,
+          dose.medication?.name || 'Medicine',
+          takenTimeIST
+        );
+      }
+
+      const caretakers = await User.find({
+        linkedPatients: patient._id,
+        telegramChatId: { $ne: null },
+      });
+
+      for (const caretaker of caretakers) {
+        await sendDoseTakenAlert(
+          caretaker.telegramChatId,
+          patient.name,
+          dose.medication?.name || 'Medicine',
+          takenTimeIST
+        );
+      }
     }
 
     res.json({ message: 'Dose marked as taken.', dose });
@@ -279,45 +353,50 @@ router.post('/taken', protectDevice, async (req, res) => {
 });
 
 // POST /api/doses/missed
-// ESP32 calls this when pill was NOT picked up within grace period (works with doseId OR just deviceId)
+// ESP32 calls this when pill was NOT picked up within grace period; requires unique dose identification
 router.post('/missed', protectDevice, async (req, res) => {
   try {
-    const { doseId, deviceId = 'DISPENSER_01', slotIndex } = req.body;
+    const { doseId, deviceId, slotIndex } = req.body;
 
-    const dose = await resolveDoseForHardware({ doseId, deviceId, slotIndex });
-    if (!dose) {
-      return res.status(404).json({ message: 'Dose or patient not found.' });
+    const { dose, error, statusCode } = await resolveDoseForHardware({
+      doseId,
+      deviceId,
+      slotIndex,
+    });
+
+    if (error || !dose) {
+      return res.status(statusCode || 404).json({ message: error || 'Scheduled dose not found.' });
     }
 
     dose.status = 'missed';
     await dose.save();
 
-    const patient = await User.findById(dose.patient._id);
-    const scheduledTime = new Date(dose.scheduledAt).toLocaleTimeString('en-IN');
+    const patient = await User.findById(dose.patient._id || dose.patient);
+    const scheduledTimeIST = formatISTTime(dose.scheduledAt, true);
 
-    // Notify patient
-    if (patient.telegramChatId) {
-      await sendDoseMissedAlert(
-        patient.telegramChatId,
-        patient.name,
-        dose.medication.name,
-        scheduledTime
-      );
-    }
+    if (patient) {
+      if (patient.telegramChatId) {
+        await sendDoseMissedAlert(
+          patient.telegramChatId,
+          patient.name,
+          dose.medication?.name || 'Medicine',
+          scheduledTimeIST
+        );
+      }
 
-    // Notify caretakers
-    const caretakers = await User.find({
-      linkedPatients: patient._id,
-      telegramChatId: { $ne: null },
-    });
+      const caretakers = await User.find({
+        linkedPatients: patient._id,
+        telegramChatId: { $ne: null },
+      });
 
-    for (const caretaker of caretakers) {
-      await sendDoseMissedAlert(
-        caretaker.telegramChatId,
-        patient.name,
-        dose.medication.name,
-        scheduledTime
-      );
+      for (const caretaker of caretakers) {
+        await sendDoseMissedAlert(
+          caretaker.telegramChatId,
+          patient.name,
+          dose.medication?.name || 'Medicine',
+          scheduledTimeIST
+        );
+      }
     }
 
     res.json({ message: 'Dose marked as missed.', dose });
@@ -333,23 +412,19 @@ router.post('/missed', protectDevice, async (req, res) => {
 
 router.use(protect);
 
-// GET /api/doses — get doses for a patient
+// GET /api/doses — get doses for a patient (filtered by date in Asia/Kolkata)
 router.get('/', async (req, res) => {
   try {
     const { patientId, date, status } = req.query;
 
-    let targetPatient = req.user.role === 'patient' ? req.user._id : patientId;
+    const targetPatient = req.user.role === 'patient' ? req.user._id : patientId;
 
     const query = { patient: targetPatient };
     if (status) query.status = status;
 
-    // Filter by date (day)
     if (date) {
-      const start = new Date(date);
-      start.setHours(0, 0, 0, 0);
-      const end = new Date(date);
-      end.setHours(23, 59, 59, 999);
-      query.scheduledAt = { $gte: start, $lte: end };
+      const { startOfDay, endOfDay } = getISTDayBounds(date);
+      query.scheduledAt = { $gte: startOfDay, $lte: endOfDay };
     }
 
     const doses = await Dose.find(query)
@@ -362,14 +437,15 @@ router.get('/', async (req, res) => {
   }
 });
 
-// GET /api/doses/stats — adherence stats
+// GET /api/doses/stats — adherence stats (using Asia/Kolkata day boundary)
 router.get('/stats', async (req, res) => {
   try {
     const { patientId, days = 7 } = req.query;
     const targetPatient = req.user.role === 'patient' ? req.user._id : patientId;
 
-    const since = new Date();
-    since.setDate(since.getDate() - parseInt(days));
+    const { startOfDay: todayStartIST } = getISTDayBounds(new Date());
+    const parsedDays = Math.max(1, parseInt(days, 10) || 7);
+    const since = new Date(todayStartIST.getTime() - (parsedDays - 1) * 24 * 60 * 60 * 1000);
 
     const doses = await Dose.find({
       patient: targetPatient,
@@ -381,7 +457,8 @@ router.get('/stats', async (req, res) => {
     const missed = doses.filter((d) => d.status === 'missed').length;
     const skipped = doses.filter((d) => d.status === 'skipped').length;
     const pending = doses.filter((d) => d.status === 'pending').length;
-    const adherencePercent = total > 0 ? Math.round((taken / (total - pending)) * 100) : 0;
+    const completedCount = total - pending;
+    const adherencePercent = completedCount > 0 ? Math.round((taken / completedCount) * 100) : 0;
 
     res.json({ total, taken, missed, skipped, pending, adherencePercent });
   } catch (err) {
@@ -408,12 +485,12 @@ router.patch('/:id', async (req, res) => {
   }
 });
 
-// POST /api/doses/schedule-reminder — set a reminder time or countdown timer from the mobile app
+// POST /api/doses/schedule-reminder — set a reminder time or countdown timer from the mobile app (in Asia/Kolkata)
 router.post('/schedule-reminder', async (req, res) => {
   try {
     const {
       medicationId,
-      mode = 'timer', // 'timer' (countdown in seconds) or 'clock' (HH:MM time string)
+      mode = 'timer', // 'timer' (countdown in seconds) or 'clock' (HH:MM time string in Asia/Kolkata)
       alertInSeconds = 275,
       clockTime,      // e.g. '14:30'
       slotIndex = 1,
@@ -440,41 +517,38 @@ router.post('/schedule-reminder', async (req, res) => {
       });
     }
 
+    const now = new Date();
     let scheduledAt;
+
     if (mode === 'clock' && clockTime) {
-      const [h, m] = clockTime.split(':').map(Number);
-      scheduledAt = new Date();
-      scheduledAt.setHours(h, m, 0, 0);
-      // If that time already passed today, schedule for today anyway if within 2 min, else tomorrow
-      if (scheduledAt.getTime() < Date.now() - 60 * 1000) {
-        scheduledAt.setDate(scheduledAt.getDate() + 1);
+      scheduledAt = getISTDateForClockTime(clockTime, now);
+      // If that IST clock time already passed more than 1 minute ago today, schedule for tomorrow in IST
+      if (scheduledAt.getTime() < now.getTime() - 60 * 1000) {
+        scheduledAt = new Date(scheduledAt.getTime() + 24 * 60 * 60 * 1000);
       }
-      // Also save this time in medication.times if not already there
+      // Preserve all existing daily reminder times and add the new clockTime if not present
       if (!medication.times.includes(clockTime)) {
-        medication.times.push(clockTime);
-        medication.times.sort();
+        medication.times = [...medication.times, clockTime].sort();
         await medication.save();
       }
     } else {
-      scheduledAt = new Date(Date.now() + Number(alertInSeconds) * 1000);
-      const timeStr = scheduledAt.toTimeString().slice(0, 5);
-      if (!medication.times.includes(timeStr)) {
-        medication.times = [timeStr];
+      scheduledAt = new Date(now.getTime() + Number(alertInSeconds) * 1000);
+      const timeStrIST = formatISTTime(scheduledAt, false);
+      if (!medication.times.includes(timeStrIST)) {
+        medication.times = [...medication.times, timeStrIST].sort();
         await medication.save();
       }
     }
 
-    // Update existing pending dose for this medication or create a new one
+    // Find an existing pending dose for this exact medication & scheduled time, or create a dedicated pending dose
     let dose = await Dose.findOne({
       patient: patientId,
       medication: medication._id,
       status: 'pending',
+      scheduledAt,
     });
 
-    if (dose) {
-      dose.scheduledAt = scheduledAt;
-      await dose.save();
-    } else {
+    if (!dose) {
       dose = await Dose.create({
         patient: patientId,
         medication: medication._id,
@@ -492,6 +566,7 @@ router.post('/schedule-reminder', async (req, res) => {
     res.json({
       message: 'Reminder scheduled and synced to ESP32!',
       dose: populated,
+      timezone: IST_TIMEZONE,
       serverTimeEpochMs: Date.now(),
     });
   } catch (err) {

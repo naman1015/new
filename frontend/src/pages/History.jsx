@@ -36,8 +36,8 @@ export default function History() {
         const d = new Date();
         d.setDate(d.getDate() - i);
         days.push({
-          label: d.toLocaleDateString('en-IN', { weekday: 'short' }),
-          date: d.toISOString().split('T')[0],
+          label: d.toLocaleDateString('en-IN', { weekday: 'short', timeZone: 'Asia/Kolkata' }),
+          date: new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(d),
           adherence: 0,
         });
       }

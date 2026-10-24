@@ -26,7 +26,12 @@ export default function Home() {
   const [selectedMedId, setSelectedMedId] = useState('');
   const [reminderTime, setReminderTime] = useState(() => {
     const d = new Date(Date.now() + 5 * 60 * 1000);
-    return d.toTimeString().slice(0, 5);
+    return new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Kolkata',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(d);
   });
   const [scheduling, setScheduling] = useState(false);
   const [toast, setToast] = useState(null);
@@ -46,7 +51,7 @@ export default function Home() {
 
   const fetchData = useCallback(async () => {
     try {
-      const today = new Date().toISOString().split('T')[0];
+      const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
       const targetDeviceId =
         (user?.device && (typeof user.device === 'object' ? user.device.deviceId : user.device)) ||
         'DISPENSER_01';

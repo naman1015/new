@@ -9,18 +9,35 @@
 #include <time.h>
 
 // ---------- WIFI & APP BACKEND CONFIG ----------
+// Configure these credentials before flashing to match your WiFi and backend .env
 const char* WIFI_SSID     = "YOUR_WIFI_SSID";
 const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 const char* SERVER_URL    = "https://new-d966.onrender.com/api";
 const char* DEVICE_ID     = "DISPENSER_01";
-const char* DEVICE_SECRET = "smm_device_secret_key_123";
+const char* DEVICE_SECRET = "REPLACE_WITH_YOUR_DEVICE_SECRET";
+
+// Google Trust Services (GTS Root R4) Root CA certificate for verifying https://*.onrender.com
+const char* ROOT_CA_CERT =
+"-----BEGIN CERTIFICATE-----\n"
+"MIICCTCCAY6gAwIBAgINAgPlwGjvYxqccpBQUjAKBggqhkjOPQQDAzBHMQswCQYD\n"
+"VQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExMQzEUMBIG\n"
+"A1UEAxMLR1RTIFJvb3QgUjQwHhcNMTYwNjIyMDAwMDAwWhcNMzYwNjIyMDAwMDAw\n"
+"WjBHMQswCQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2Vz\n"
+"IExMQzEUMBIGA1UEAxMLR1RTIFJvb3QgUjQwdjAQBgcqhkjOPQIBBgUrgQQAIgNi\n"
+"AATzdHOnaItgrkO4NcWBMHtLSZ37wWHO5t5GvWvVYRg1rkDdc/eJkTBa6zzuhXyi\n"
+"QHY7qca4R9gq55KRanPpsXI5nymfopjTX15YhmUPoYRlBtHci8nHc8iMai/lxKvR\n"
+"HYqjQjBAMA4GA1UdDwEB/wQEAwIBhjAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQW\n"
+"BBSATNbrdP9JNqPV2Py1PsVq8JQdjDAKBggqhkjOPQQDAwNpADBmAjEA6ED/g94D\n"
+"9J+uHXqnLrmvT/aDHQ4thQEd0dlq7A/Cr8deVl5c1RxYIigL9zC2L7F8AjEA8GE8\n"
+"p/SgguMh1YQdc4acLa/KNJvxn7kjNuK8YAOdgLOaVsjh4rsUecrNIdSUtUlD\n"
+"-----END CERTIFICATE-----\n";
 
 // ---------- ESP32 PIN ASSIGNMENTS ----------
 const int GREEN_LED_PIN = 13;
-const int RED_LED_PIN = 18;
-const int BUTTON_PIN = 34;
-const int IR_PIN = 35;
-const int BUZZER_PIN = 14;
+const int RED_LED_PIN   = 18;
+const int BUTTON_PIN    = 34;
+const int IR_PIN        = 35;
+const int BUZZER_PIN    = 14;
 
 const int MOTOR_IN1 = 25;
 const int MOTOR_IN2 = 26;
@@ -28,10 +45,9 @@ const int MOTOR_IN3 = 27;
 const int MOTOR_IN4 = 32;
 
 // ---------- OPTIONS ----------
-const bool ENABLE_MOTOR = true; // Enable only after motor testing
-const bool ENABLE_BUZZER = true; // Enable after buzzer wiring test
+const bool ENABLE_MOTOR  = true;
+const bool ENABLE_BUZZER = true;
 
-const unsigned long GREEN_WARNING_MS = 5000UL;
 const unsigned long REMOVAL_TIMEOUT_MS = 60000UL; // Auto-stop after 60s if missed
 
 const int STEPS_PER_REV = 2048;
@@ -79,31 +95,47 @@ void stepMotorBy(int fullSteps) {
   stopMotorCoils();
 }
 
-// ---------- MEDICINE SCHEDULES (Editable from Mobile App) ----------
-int MEDICINE_HOURS[6] = {8, 9, 13, 14, 20, 21};
-int MEDICINE_MINUTES[6] = {0, 0, 0, 0, 0, 0};
+// ---------- MEDICINE SCHEDULES (Supports multiple daily reminder times per compartment) ----------
+const int MAX_TIMES_PER_SLOT = 8;
+int slotTimeCount[6] = {1, 1, 1, 1, 1, 1};
+int MEDICINE_HOURS[6][MAX_TIMES_PER_SLOT] = {
+  {8, -1, -1, -1, -1, -1, -1, -1},
+  {9, -1, -1, -1, -1, -1, -1, -1},
+  {13, -1, -1, -1, -1, -1, -1, -1},
+  {14, -1, -1, -1, -1, -1, -1, -1},
+  {20, -1, -1, -1, -1, -1, -1, -1},
+  {21, -1, -1, -1, -1, -1, -1, -1}
+};
+int MEDICINE_MINUTES[6][MAX_TIMES_PER_SLOT] = {
+  {0, -1, -1, -1, -1, -1, -1, -1},
+  {0, -1, -1, -1, -1, -1, -1, -1},
+  {0, -1, -1, -1, -1, -1, -1, -1},
+  {0, -1, -1, -1, -1, -1, -1, -1},
+  {0, -1, -1, -1, -1, -1, -1, -1},
+  {0, -1, -1, -1, -1, -1, -1, -1}
+};
 
 // ---------- STATE ----------
-int lastTriggerDate[6] = {0, 0, 0, 0, 0, 0};
+int lastTriggerDate[6][MAX_TIMES_PER_SLOT] = {{0}};
 int activeCompartment = -1;
+String activeDoseId = "";
 int currentMotorPosition = 0;
 
 bool previousButtonState = HIGH;
-bool previousIRState = LOW;
 bool irEventReported = false;
 
-unsigned long greenStartTime = 0;
 unsigned long waitingStartTime = 0;
 unsigned long lastBeepTime = 0;
 unsigned long lastAppSyncTime = 0;
-bool greenWarningActive = false;
 bool waitingForRemoval = false;
 bool buzzerState = false;
 
 // Set this after testing your IR sensor.
 // Many obstacle sensors output LOW when an object is detected.
-// This default assumes a transition to HIGH indicates removal.
 const int IR_REMOVAL_STATE = HIGH;
+
+// Forward declaration
+void selectCompartment(int slot, const String& doseId = "");
 
 // ---------- HELPERS ----------
 int makeDateKey(int year, int month, int day) {
@@ -147,7 +179,7 @@ void syncRTCWithNetworkTime() {
   }
 }
 
-void reportDoseToApp(int slotIndex, bool taken) {
+void reportDoseToApp(int slotIndex, const String& doseId, bool taken) {
   if (WiFi.status() != WL_CONNECTED) return;
 
   HTTPClient http;
@@ -156,7 +188,7 @@ void reportDoseToApp(int slotIndex, bool taken) {
   WiFiClient plainClient;
 
   if (url.startsWith("https://")) {
-    secureClient.setInsecure();
+    secureClient.setCACert(ROOT_CA_CERT);
     http.begin(secureClient, url);
   } else {
     http.begin(plainClient, url);
@@ -165,10 +197,18 @@ void reportDoseToApp(int slotIndex, bool taken) {
   http.addHeader("Content-Type", "application/json");
   http.addHeader("Authorization", String("Bearer ") + DEVICE_SECRET);
 
-  String payload = "{\"deviceId\":\"" + String(DEVICE_ID) +
-                   "\",\"slotIndex\":" + String(slotIndex) + "}";
+  DynamicJsonDocument payloadDoc(256);
+  payloadDoc["deviceId"] = DEVICE_ID;
+  payloadDoc["slotIndex"] = slotIndex;
+  if (doseId.length() > 0) {
+    payloadDoc["doseId"] = doseId;
+  }
+  String payload;
+  serializeJson(payloadDoc, payload);
+
   int code = http.POST(payload);
-  Serial.printf("App notified (%s) -> HTTP %d\n", taken ? "TAKEN" : "MISSED", code);
+  Serial.printf("App notified (%s, slot=%d, doseId=%s) -> HTTP %d\n",
+                taken ? "TAKEN" : "MISSED", slotIndex, doseId.c_str(), code);
   http.end();
 }
 
@@ -187,7 +227,7 @@ void syncScheduleFromApp() {
   WiFiClient plainClient;
 
   if (url.startsWith("https://")) {
-    secureClient.setInsecure();
+    secureClient.setCACert(ROOT_CA_CERT);
     http.begin(secureClient, url);
   } else {
     http.begin(plainClient, url);
@@ -197,30 +237,69 @@ void syncScheduleFromApp() {
   int code = http.GET();
 
   if (code == 200) {
-    DynamicJsonDocument doc(2048);
+    DynamicJsonDocument doc(4096);
     if (!deserializeJson(doc, http.getString())) {
-      // 1. Update slot reminder times set in the mobile app
-      JsonArray slots = doc["slotSchedule"].as<JsonArray>();
-      for (JsonObject s : slots) {
-        int idx = (s["slotIndex"] | 1) - 1;
-        int newHour = s["hour"] | -1;
-        int newMin  = s["minute"] | -1;
-        if (idx >= 0 && idx < 6 && newHour >= 0 && newMin >= 0) {
-          if (MEDICINE_HOURS[idx] != newHour || MEDICINE_MINUTES[idx] != newMin) {
-            MEDICINE_HOURS[idx] = newHour;
-            MEDICINE_MINUTES[idx] = newMin;
-            lastTriggerDate[idx] = 0; // Allow triggering at the newly set time today
-            Serial.printf("Updated Slot %d time from app -> %02d:%02d\n", idx + 1, newHour, newMin);
+      // 1. Update all daily reminder times per compartment from the mobile app
+      if (doc.containsKey("slotSchedule")) {
+        JsonArray slots = doc["slotSchedule"].as<JsonArray>();
+        int newCounts[6] = {0, 0, 0, 0, 0, 0};
+        int newHours[6][MAX_TIMES_PER_SLOT];
+        int newMinutes[6][MAX_TIMES_PER_SLOT];
+        for (int i = 0; i < 6; i++) {
+          for (int t = 0; t < MAX_TIMES_PER_SLOT; t++) {
+            newHours[i][t] = -1;
+            newMinutes[i][t] = -1;
+          }
+        }
+
+        for (JsonObject s : slots) {
+          int idx = (s["slotIndex"] | 1) - 1;
+          int h = s["hour"] | -1;
+          int m = s["minute"] | -1;
+          if (idx >= 0 && idx < 6 && h >= 0 && m >= 0 && newCounts[idx] < MAX_TIMES_PER_SLOT) {
+            int pos = newCounts[idx]++;
+            newHours[idx][pos] = h;
+            newMinutes[idx][pos] = m;
+          }
+        }
+
+        // Apply updated schedule per compartment while preserving trigger history for unchanged times
+        for (int idx = 0; idx < 6; idx++) {
+          if (newCounts[idx] == 0) continue;
+          int updatedTriggers[MAX_TIMES_PER_SLOT] = {0};
+
+          for (int t = 0; t < newCounts[idx]; t++) {
+            int nh = newHours[idx][t];
+            int nm = newMinutes[idx][t];
+            int prevTrigger = 0;
+            for (int oldIdx = 0; oldIdx < slotTimeCount[idx]; oldIdx++) {
+              if (MEDICINE_HOURS[idx][oldIdx] == nh && MEDICINE_MINUTES[idx][oldIdx] == nm) {
+                prevTrigger = lastTriggerDate[idx][oldIdx];
+                break;
+              }
+            }
+            updatedTriggers[t] = prevTrigger;
+            if (t >= slotTimeCount[idx] || MEDICINE_HOURS[idx][t] != nh || MEDICINE_MINUTES[idx][t] != nm) {
+              Serial.printf("Synced Compartment %d reminder #%d -> %02d:%02d\n", idx + 1, t + 1, nh, nm);
+            }
+          }
+
+          slotTimeCount[idx] = newCounts[idx];
+          for (int t = 0; t < MAX_TIMES_PER_SLOT; t++) {
+            MEDICINE_HOURS[idx][t] = newHours[idx][t];
+            MEDICINE_MINUTES[idx][t] = newMinutes[idx][t];
+            lastTriggerDate[idx][t] = (t < newCounts[idx]) ? updatedTriggers[t] : 0;
           }
         }
       }
 
-      // 2. If a timer/reminder set from the app is due right now, trigger it
+      // 2. If a scheduled dose from the app is due right now, trigger it with its exact doseId
       JsonObject nextDose = doc["nextDose"];
       if (!nextDose.isNull() && (nextDose["shouldAlertNow"] == true)) {
         int slotIdx = (nextDose["slotIndex"] | 1) - 1;
+        String doseId = String(nextDose["_id"] | "");
         if (slotIdx >= 0 && slotIdx < 6) {
-          selectCompartment(slotIdx);
+          selectCompartment(slotIdx, doseId);
         }
       }
     }
@@ -249,34 +328,11 @@ void updateBuzzer() {
   }
 }
 
-// ---------- START WARNING ----------
-void selectCompartment(int slot) {
-  activeCompartment = slot;
-  greenWarningActive = true;
-  waitingForRemoval = false;
-  irEventReported = false;
-
-  digitalWrite(GREEN_LED_PIN, HIGH);
-  digitalWrite(RED_LED_PIN, LOW);
-  stopBuzzer();
-
-  greenStartTime = millis();
-
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Medicine Soon");
-  lcd.setCursor(0, 1);
-  lcd.print("Compartment ");
-  lcd.print(slot + 1);
-
-  Serial.print("EVENT: green_warning, compartment=");
-  Serial.println(slot + 1);
-}
-
-// ---------- OPEN SELECTED COMPARTMENT ----------
+// ---------- OPEN SELECTED COMPARTMENT & TRIGGER DUE ALERT (RED LED + BUZZER) ----------
 void openCompartment() {
   int slot = activeCompartment;
 
+  // Keep Green LED off while medicine is due
   digitalWrite(GREEN_LED_PIN, LOW);
 
   // Move stepper motor to open the selected compartment
@@ -294,15 +350,14 @@ void openCompartment() {
     currentMotorPosition = targetPosition % STEPS_PER_REV;
   }
 
-  // Start the medicine-taking period.
+  // Start the medicine-taking period immediately with RED LED and Buzzer
   waitingForRemoval = true;
-  greenWarningActive = false;
   waitingStartTime = millis();
 
   digitalWrite(RED_LED_PIN, HIGH);
   lastBeepTime = millis();
-  buzzerState = false;
-  stopBuzzer();
+  buzzerState = true;
+  digitalWrite(BUZZER_PIN, ENABLE_BUZZER ? HIGH : LOW);
 
   lcd.clear();
   lcd.setCursor(0, 0);
@@ -315,15 +370,27 @@ void openCompartment() {
   Serial.println(slot + 1);
 }
 
+void selectCompartment(int slot, const String& doseId) {
+  activeCompartment = slot;
+  activeDoseId = doseId;
+  irEventReported = false;
+
+  // Do NOT turn on Green LED before medicine is due; open compartment and alert with Red LED + Buzzer
+  openCompartment();
+}
+
 // ---------- FINISH REMINDER ----------
 void finishReminder(const char *reason) {
   if (activeCompartment < 0) return;
 
   int finishedSlot = activeCompartment + 1;
+  String finishedDoseId = activeDoseId;
   bool wasTaken = (strcmp(reason, "timeout") != 0);
 
   Serial.print("EVENT: reminder_finished, compartment=");
   Serial.print(finishedSlot);
+  Serial.print(", doseId=");
+  Serial.print(finishedDoseId);
   Serial.print(", reason=");
   Serial.println(reason);
 
@@ -344,11 +411,11 @@ void finishReminder(const char *reason) {
   lcd.setCursor(0, 1);
   lcd.print("Ready");
 
-  // Sync result with Mobile App in real time
-  reportDoseToApp(finishedSlot, wasTaken);
+  // Sync result with Mobile App in real time using exact doseId & slotIndex
+  reportDoseToApp(finishedSlot, finishedDoseId, wasTaken);
 
   activeCompartment = -1;
-  greenWarningActive = false;
+  activeDoseId = "";
   waitingForRemoval = false;
   irEventReported = false;
 
@@ -367,13 +434,17 @@ void checkSchedule(
   for (int i = 0; i < 6; i++) {
     if (activeCompartment != -1) return;
 
-    if (hourNow == MEDICINE_HOURS[i] &&
-        minuteNow == MEDICINE_MINUTES[i] &&
-        lastTriggerDate[i] != today) {
+    for (int t = 0; t < slotTimeCount[i]; t++) {
+      if (MEDICINE_HOURS[i][t] < 0 || MEDICINE_MINUTES[i][t] < 0) continue;
 
-      lastTriggerDate[i] = today;
-      selectCompartment(i);
-      return;
+      if (hourNow == MEDICINE_HOURS[i][t] &&
+          minuteNow == MEDICINE_MINUTES[i][t] &&
+          lastTriggerDate[i][t] != today) {
+
+        lastTriggerDate[i][t] = today;
+        selectCompartment(i, "");
+        return;
+      }
     }
   }
 }
@@ -501,12 +572,6 @@ void loop() {
       lastAppSyncTime = millis();
       syncScheduleFromApp();
     }
-  }
-
-  // After 5 seconds, stop green warning and start red alarm.
-  if (greenWarningActive &&
-      millis() - greenStartTime >= GREEN_WARNING_MS) {
-    openCompartment();
   }
 
   // Auto-timeout if pill is not removed within REMOVAL_TIMEOUT_MS

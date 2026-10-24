@@ -1,14 +1,19 @@
+const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 
 // Protect routes — requires valid JWT token
 const protect = async (req, res, next) => {
   try {
+    if (!process.env.JWT_SECRET) {
+      return res.status(500).json({ message: 'Server configuration error: JWT_SECRET is not set.' });
+    }
+
     let token;
 
     if (
       req.headers.authorization &&
-      req.headers.authorization.startsWith('Bearer')
+      req.headers.authorization.startsWith('Bearer ')
     ) {
       token = req.headers.authorization.split(' ')[1];
     }
@@ -42,11 +47,26 @@ const restrictTo = (...roles) => {
   };
 };
 
-// Protect hardware routes — requires device secret key
+// Protect hardware routes — requires configured DEVICE_SECRET key
 const protectDevice = (req, res, next) => {
-  const authHeader = req.headers.authorization;
+  const configuredSecret = process.env.DEVICE_SECRET;
+  if (!configuredSecret) {
+    return res.status(500).json({ message: 'Server configuration error: DEVICE_SECRET is not set.' });
+  }
 
-  if (!authHeader || authHeader !== `Bearer ${process.env.DEVICE_SECRET}`) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ message: 'Invalid device credentials.' });
+  }
+
+  const providedSecret = authHeader.slice('Bearer '.length);
+  const expectedBuf = Buffer.from(configuredSecret, 'utf8');
+  const providedBuf = Buffer.from(providedSecret, 'utf8');
+
+  if (
+    expectedBuf.length !== providedBuf.length ||
+    !crypto.timingSafeEqual(expectedBuf, providedBuf)
+  ) {
     return res.status(401).json({ message: 'Invalid device credentials.' });
   }
 

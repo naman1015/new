@@ -8,12 +8,14 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: TZ
+        value: Asia/Kolkata
       - key: PORT
         value: 5000
       - key: JWT_EXPIRES_IN
         value: 7d
       - key: DEVICE_SECRET
-        value: smm_device_secret_key_123
+        sync: false
       - key: MONGO_URI
         sync: false
       - key: JWT_SECRET

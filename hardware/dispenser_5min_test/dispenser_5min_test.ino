@@ -11,7 +11,23 @@ const char* password = "YOUR_WIFI_PASSWORD";
 // Replace with your live Render backend URL once deployed (e.g. "https://smart-medicine-manager-api.onrender.com/api")
 const char* serverUrl = "https://new-d966.onrender.com/api";
 const char* deviceId = "DISPENSER_01";
-const char* deviceSecret = "smm_device_secret_key_123";
+const char* deviceSecret = "REPLACE_WITH_YOUR_DEVICE_SECRET";
+
+// Google Trust Services (GTS Root R4) Root CA certificate for verifying https://*.onrender.com
+const char* ROOT_CA_CERT =
+"-----BEGIN CERTIFICATE-----\n"
+"MIICCTCCAY6gAwIBAgINAgPlwGjvYxqccpBQUjAKBggqhkjOPQQDAzBHMQswCQYD\n"
+"VQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExMQzEUMBIG\n"
+"A1UEAxMLR1RTIFJvb3QgUjQwHhcNMTYwNjIyMDAwMDAwWhcNMzYwNjIyMDAwMDAw\n"
+"WjBHMQswCQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2Vz\n"
+"IExMQzEUMBIGA1UEAxMLR1RTIFJvb3QgUjQwdjAQBgcqhkjOPQIBBgUrgQQAIgNi\n"
+"AATzdHOnaItgrkO4NcWBMHtLSZ37wWHO5t5GvWvVYRg1rkDdc/eJkTBa6zzuhXyi\n"
+"QHY7qca4R9gq55KRanPpsXI5nymfopjTX15YhmUPoYRlBtHci8nHc8iMai/lxKvR\n"
+"HYqjQjBAMA4GA1UdDwEB/wQEAwIBhjAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQW\n"
+"BBSATNbrdP9JNqPV2Py1PsVq8JQdjDAKBggqhkjOPQQDAwNpADBmAjEA6ED/g94D\n"
+"9J+uHXqnLrmvT/aDHQ4thQEd0dlq7A/Cr8deVl5c1RxYIigL9zC2L7F8AjEA8GE8\n"
+"p/SgguMh1YQdc4acLa/KNJvxn7kjNuK8YAOdgLOaVsjh4rsUecrNIdSUtUlD\n"
+"-----END CERTIFICATE-----\n";
 
 // ─── HARDWARE PIN DEFINITIONS (Update to match your wiring) ──────
 #define RED_LED_PIN    4
@@ -62,7 +78,7 @@ int postToBackend(const char* endpoint, const String& jsonPayload, String* respo
   WiFiClient plainClient;
 
   if (fullUrl.startsWith("https://")) {
-    secureClient.setInsecure();
+    secureClient.setCACert(ROOT_CA_CERT);
     http.begin(secureClient, fullUrl);
   } else {
     http.begin(plainClient, fullUrl);
@@ -104,7 +120,7 @@ void pollRemindersFromApp() {
   WiFiClient plainClient;
 
   if (fullUrl.startsWith("https://")) {
-    secureClient.setInsecure();
+    secureClient.setCACert(ROOT_CA_CERT);
     http.begin(secureClient, fullUrl);
   } else {
     http.begin(plainClient, fullUrl);
