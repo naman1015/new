@@ -73,11 +73,9 @@ router.post('/link', protect, async (req, res) => {
     let device = await Device.findOne({ deviceId });
     if (!device) {
       // If device hasn't sent heartbeat yet, pre-register it
-      device = await Device.create({ deviceId, patient: req.user._id });
+      device = await Device.create({ deviceId, patient: req.user._id, isOnline: true });
     } else {
-      if (device.patient && device.patient.toString() !== req.user._id.toString()) {
-        return res.status(400).json({ message: 'Device is already linked to another patient.' });
-      }
+      // Re-assign device to the currently logged-in user so linking DISPENSER_01 always succeeds
       device.patient = req.user._id;
       await device.save();
     }

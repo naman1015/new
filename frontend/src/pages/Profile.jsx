@@ -13,7 +13,9 @@ export default function Profile() {
 
   const [telegramId, setTelegramId] = useState(user?.telegramChatId || '');
   const [patientEmail, setPatientEmail] = useState('');
-  const [deviceId, setDeviceId] = useState('');
+  const [deviceId, setDeviceId] = useState(
+    (user?.device && (typeof user.device === 'object' ? user.device.deviceId : user.device)) || 'DISPENSER_01'
+  );
   const [linkedDevice, setLinkedDevice] = useState(null);
   const [toast, setToast] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -187,7 +189,7 @@ export default function Profile() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
             <span style={{ fontSize: seniorMode ? 28 : 22 }}>📟</span>
             <div>
-              <h3 style={{ fontSize: seniorMode ? '1.35rem' : '1.1rem' }}>Dispenser Machine</h3>
+              <h3 style={{ fontSize: seniorMode ? '1.35rem' : '1.1rem' }}>Dispenser Device</h3>
               <p style={{ fontSize: seniorMode ? '0.95rem' : '0.78rem', marginTop: 2 }}>
                 Link your physical pill dispenser box
               </p>

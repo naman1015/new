@@ -14,7 +14,7 @@ const char* WIFI_SSID     = "YOUR_WIFI_SSID";
 const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 const char* SERVER_URL    = "https://new-d966.onrender.com/api";
 const char* DEVICE_ID     = "DISPENSER_01";
-const char* DEVICE_SECRET = "REPLACE_WITH_YOUR_DEVICE_SECRET";
+const char* DEVICE_SECRET = "smm_esp32_disp01_secret_2026";
 
 // Google Trust Services (GTS Root R4) Root CA certificate for verifying https://*.onrender.com
 const char* ROOT_CA_CERT =
@@ -239,6 +239,12 @@ void syncScheduleFromApp() {
   if (code == 200) {
     DynamicJsonDocument doc(4096);
     if (!deserializeJson(doc, http.getString())) {
+      static bool firstSyncLogged = false;
+      const char* serverIST = doc["serverTimeIST"] | "";
+      if (!firstSyncLogged) {
+        firstSyncLogged = true;
+        Serial.printf("[DoseTrack Sync] Connected to app! Server IST: %s\n", serverIST);
+      }
       // 1. Update all daily reminder times per compartment from the mobile app
       if (doc.containsKey("slotSchedule")) {
         JsonArray slots = doc["slotSchedule"].as<JsonArray>();
@@ -303,6 +309,8 @@ void syncScheduleFromApp() {
         }
       }
     }
+  } else {
+    Serial.printf("[DoseTrack Sync] HTTP %d from %s\n", code, url.c_str());
   }
   http.end();
 }
