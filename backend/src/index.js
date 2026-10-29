@@ -2,6 +2,7 @@ process.env.TZ = 'Asia/Kolkata';
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
 const fs = require('fs');
+const https = require('https');
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -51,6 +52,74 @@ app.get('/api/health', (req, res) => {
     timezone: IST_TIMEZONE,
     timestamp: new Date().toISOString(),
   });
+});
+
+// Helper: fetch MP3 buffer for a single short text chunk
+function fetchTtsChunk(chunkText) {
+  return new Promise((resolve, reject) => {
+    const url = `https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=en-IN&q=${encodeURIComponent(chunkText)}`;
+    https
+      .get(
+        url,
+        {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36',
+          },
+        },
+        (resp) => {
+          if (resp.statusCode !== 200) {
+            return reject(new Error(`TTS upstream status ${resp.statusCode}`));
+          }
+          const data = [];
+          resp.on('data', (d) => data.push(d));
+          resp.on('end', () => resolve(Buffer.concat(data)));
+        }
+      )
+      .on('error', reject);
+  });
+}
+
+// GET /api/tts?text=... — Audio speech readout endpoint for Android WebView & mobile browsers
+app.get('/api/tts', async (req, res) => {
+  try {
+    const rawText = String(req.query.text || '')
+      .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (!rawText) {
+      return res.status(400).json({ message: 'text query parameter is required.' });
+    }
+
+    // Split text into <= 180 char chunks on sentence/comma boundaries
+    const words = rawText.split(' ');
+    const chunks = [];
+    let current = '';
+    for (const w of words) {
+      if ((current + ' ' + w).trim().length > 180) {
+        if (current) chunks.push(current.trim());
+        current = w;
+      } else {
+        current = (current + ' ' + w).trim();
+      }
+    }
+    if (current) chunks.push(current.trim());
+
+    const buffers = [];
+    for (const chunk of chunks.slice(0, 6)) {
+      const buf = await fetchTtsChunk(chunk);
+      buffers.push(buf);
+    }
+
+    const combined = Buffer.concat(buffers);
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Content-Length', combined.length);
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    return res.send(combined);
+  } catch (err) {
+    console.error('TTS error:', err.message);
+    return res.status(500).json({ message: 'Failed to synthesize speech.' });
+  }
 });
 
 // Serve built React frontend if available (works whether Root Dir is backend/ or repo root)
