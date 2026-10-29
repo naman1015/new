@@ -194,7 +194,7 @@ router.patch('/:id', async (req, res) => {
   }
 });
 
-// DELETE /api/medications/:id — soft delete
+// DELETE /api/medications/:id — remove medication and its associated doses
 router.delete('/:id', async (req, res) => {
   try {
     const medication = await Medication.findByIdAndUpdate(
@@ -202,10 +202,11 @@ router.delete('/:id', async (req, res) => {
       { isActive: false },
       { new: true }
     );
+    await Dose.deleteMany({ medication: req.params.id });
     if (medication) {
       await syncTodayDosesForMedication(medication);
     }
-    res.json({ message: 'Medication deactivated.' });
+    res.json({ message: 'Medication removed.' });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
