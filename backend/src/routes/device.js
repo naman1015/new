@@ -72,20 +72,19 @@ router.post('/link', protect, async (req, res) => {
 
     let device = await Device.findOne({ deviceId });
     if (!device) {
-      // If device hasn't sent heartbeat yet, pre-register it as online
+      // If device hasn't sent heartbeat yet, pre-register it as offline until ESP32 connects
       device = await Device.create({
         deviceId,
         patient: req.user._id,
-        isOnline: true,
-        lastHeartbeat: { receivedAt: new Date() },
+        isOnline: false,
       });
     } else {
-      // Re-assign device to the currently logged-in user and ensure it shows online
+      // Re-assign device to the currently logged-in user and compute live online state
+      const lastSeen = device.lastHeartbeat?.receivedAt
+        ? new Date(device.lastHeartbeat.receivedAt).getTime()
+        : 0;
       device.patient = req.user._id;
-      device.isOnline = true;
-      if (!device.lastHeartbeat || !device.lastHeartbeat.receivedAt) {
-        device.lastHeartbeat = { ...(device.lastHeartbeat || {}), receivedAt: new Date() };
-      }
+      device.isOnline = Boolean(lastSeen && Date.now() - lastSeen <= 45 * 1000);
       await device.save();
     }
 
@@ -120,7 +119,7 @@ router.post('/register', protect, restrictTo('admin'), async (req, res) => {
   }
 });
 
-// GET /api/device/:deviceId — get device status (auto-provision & keep online so UI never shows offline error)
+// GET /api/device/:deviceId — get live device status based on real ESP32 heartbeat/poll recency
 router.get('/:deviceId', protect, async (req, res) => {
   try {
     let device = await Device.findOne({ deviceId: req.params.deviceId }).populate(
@@ -128,20 +127,17 @@ router.get('/:deviceId', protect, async (req, res) => {
       'name email'
     );
 
-    if (!device) {
-      device = await Device.create({
-        deviceId: req.params.deviceId,
-        patient: req.user._id,
-        isOnline: true,
-        lastHeartbeat: { receivedAt: new Date() },
-      });
-    } else if (!device.isOnline) {
+    if (!device) return res.status(404).json({ message: 'Device not found.' });
+
+    const lastSeen = device.lastHeartbeat?.receivedAt
+      ? new Date(device.lastHeartbeat.receivedAt).getTime()
+      : 0;
+    const isLiveOnline = Boolean(lastSeen && Date.now() - lastSeen <= 45 * 1000);
+
+    if (device.isOnline !== isLiveOnline) {
       device = await Device.findOneAndUpdate(
         { deviceId: req.params.deviceId },
-        {
-          isOnline: true,
-          'lastHeartbeat.receivedAt': device.lastHeartbeat?.receivedAt || new Date(),
-        },
+        { isOnline: isLiveOnline },
         { new: true }
       ).populate('patient', 'name email');
     }

@@ -25,17 +25,17 @@ router.get('/default-session', async (req, res) => {
     }
 
     const Device = require('../models/Device');
-    const existingDevice = await Device.findOne({ deviceId: 'DISPENSER_01' });
     const device = await Device.findOneAndUpdate(
       { deviceId: 'DISPENSER_01' },
-      {
-        patient: user._id,
-        isOnline: true,
-        'lastHeartbeat.receivedAt': existingDevice?.lastHeartbeat?.receivedAt || new Date(),
-      },
+      { patient: user._id },
       { new: true, upsert: true }
     );
     await User.findByIdAndUpdate(user._id, { device: device._id });
+
+    const lastSeen = device.lastHeartbeat?.receivedAt
+      ? new Date(device.lastHeartbeat.receivedAt).getTime()
+      : 0;
+    const isLiveOnline = Boolean(lastSeen && Date.now() - lastSeen <= 45 * 1000);
 
     const token = signToken(user._id);
     res.json({
@@ -46,7 +46,7 @@ router.get('/default-session', async (req, res) => {
         email: user.email,
         role: user.role,
         telegramChatId: user.telegramChatId,
-        device: { deviceId: 'DISPENSER_01', isOnline: true },
+        device: { deviceId: 'DISPENSER_01', isOnline: isLiveOnline },
       },
     });
   } catch (err) {

@@ -236,18 +236,20 @@ cron.schedule(
   { timezone: IST_TIMEZONE }
 );
 
-// Keep registered dispenser devices marked online so dashboard never shows offline errors
+// Every minute: mark devices offline if no heartbeat/poll in last 45 seconds
 cron.schedule(
-  '*/2 * * * *',
+  '* * * * *',
   async () => {
     try {
       const Device = require('./models/Device');
+      const threshold = new Date(Date.now() - 45 * 1000);
+
       await Device.updateMany(
-        { isOnline: false },
-        { isOnline: true }
+        { 'lastHeartbeat.receivedAt': { $lt: threshold }, isOnline: true },
+        { isOnline: false }
       );
     } catch (err) {
-      console.error('Cron (device status) error:', err.message);
+      console.error('Cron (device offline) error:', err.message);
     }
   },
   { timezone: IST_TIMEZONE }
