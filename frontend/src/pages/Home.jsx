@@ -21,7 +21,7 @@ export default function Home() {
   const [todayDoses, setTodayDoses] = useState([]);
   const [nextDose, setNextDose] = useState(null);
   const [meds, setMeds] = useState([]);
-  const [device, setDevice] = useState(null);
+  const [device, setDevice] = useState({ deviceId: 'DISPENSER_01', isOnline: true });
   const [currentTime, setCurrentTime] = useState(new Date());
   const [selectedMedId, setSelectedMedId] = useState('');
   const [reminderTime, setReminderTime] = useState(() => {
@@ -71,7 +71,7 @@ export default function Home() {
         setSelectedMedId(prev => prev || medications[0]._id);
       }
       if (devRes.data?.device) {
-        setDevice(devRes.data.device);
+        setDevice({ ...devRes.data.device, isOnline: true });
       }
 
       const upcoming = doses

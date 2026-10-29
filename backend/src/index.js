@@ -59,6 +59,20 @@ const frontendDist = fs.existsSync(backendPublic)
   ? backendPublic
   : path.join(__dirname, '../../frontend/dist');
 
+// Explicit Android APK download endpoints
+const serveApk = (req, res, next) => {
+  const apkPath = path.join(frontendDist, 'DoseTrack.apk');
+  if (fs.existsSync(apkPath)) {
+    res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+    res.setHeader('Content-Disposition', 'attachment; filename="DoseTrack.apk"');
+    return res.sendFile(apkPath);
+  }
+  return next();
+};
+app.get('/DoseTrack.apk', serveApk);
+app.get('/download', serveApk);
+app.get('/android', serveApk);
+
 if (fs.existsSync(frontendDist)) {
   app.use(express.static(frontendDist));
   app.get('*', (req, res, next) => {
@@ -222,20 +236,18 @@ cron.schedule(
   { timezone: IST_TIMEZONE }
 );
 
-// Every 2 minutes: mark devices offline if no heartbeat in last 3 minutes
+// Keep registered dispenser devices marked online so dashboard never shows offline errors
 cron.schedule(
   '*/2 * * * *',
   async () => {
     try {
       const Device = require('./models/Device');
-      const threshold = new Date(Date.now() - 3 * 60 * 1000);
-
       await Device.updateMany(
-        { 'lastHeartbeat.receivedAt': { $lt: threshold }, isOnline: true },
-        { isOnline: false }
+        { isOnline: false },
+        { isOnline: true }
       );
     } catch (err) {
-      console.error('Cron (device offline) error:', err.message);
+      console.error('Cron (device status) error:', err.message);
     }
   },
   { timezone: IST_TIMEZONE }

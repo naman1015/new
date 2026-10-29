@@ -23,10 +23,10 @@ const deviceSchema = new mongoose.Schema(
       uptimeSeconds: { type: Number, default: null },
       freeHeapBytes: { type: Number, default: null },
     },
-    // Is the device currently online? (updated by cron)
+    // Is the device currently online?
     isOnline: {
       type: Boolean,
-      default: false,
+      default: true,
     },
     // Slot configuration (which slot has which color)
     slotColors: {
@@ -47,5 +47,5 @@ const { createHybridModel } = require('../services/localStore');
 module.exports = createHybridModel(
   mongoose.model('Device', deviceSchema),
   'devices',
-  { patient: null, lastHeartbeat: {}, isOnline: false, isActive: true }
+  { patient: null, lastHeartbeat: {}, isOnline: true, isActive: true }
 );

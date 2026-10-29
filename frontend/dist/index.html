@@ -13,10 +13,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="description" content="Smart IoT Medicine Manager with dose tracking and caretaker alerts" />
     <title>DoseTrack — Smart Medicine Manager</title>
-    <script type="module" crossorigin src="/assets/index-BFDNT_Y9.js"></script>
+    <script type="module" crossorigin src="/assets/index-BZwhR-_q.js"></script>
     <link rel="stylesheet" crossorigin href="/assets/index-DIahmWto.css">
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js').catch(() => {});
+        });
+      }
+    </script>
   </body>
 </html>

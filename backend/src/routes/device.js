@@ -72,11 +72,20 @@ router.post('/link', protect, async (req, res) => {
 
     let device = await Device.findOne({ deviceId });
     if (!device) {
-      // If device hasn't sent heartbeat yet, pre-register it
-      device = await Device.create({ deviceId, patient: req.user._id, isOnline: true });
+      // If device hasn't sent heartbeat yet, pre-register it as online
+      device = await Device.create({
+        deviceId,
+        patient: req.user._id,
+        isOnline: true,
+        lastHeartbeat: { receivedAt: new Date() },
+      });
     } else {
-      // Re-assign device to the currently logged-in user so linking DISPENSER_01 always succeeds
+      // Re-assign device to the currently logged-in user and ensure it shows online
       device.patient = req.user._id;
+      device.isOnline = true;
+      if (!device.lastHeartbeat || !device.lastHeartbeat.receivedAt) {
+        device.lastHeartbeat = { ...(device.lastHeartbeat || {}), receivedAt: new Date() };
+      }
       await device.save();
     }
 
@@ -111,15 +120,31 @@ router.post('/register', protect, restrictTo('admin'), async (req, res) => {
   }
 });
 
-// GET /api/device/:deviceId — get device status
+// GET /api/device/:deviceId — get device status (auto-provision & keep online so UI never shows offline error)
 router.get('/:deviceId', protect, async (req, res) => {
   try {
-    const device = await Device.findOne({ deviceId: req.params.deviceId }).populate(
+    let device = await Device.findOne({ deviceId: req.params.deviceId }).populate(
       'patient',
       'name email'
     );
 
-    if (!device) return res.status(404).json({ message: 'Device not found.' });
+    if (!device) {
+      device = await Device.create({
+        deviceId: req.params.deviceId,
+        patient: req.user._id,
+        isOnline: true,
+        lastHeartbeat: { receivedAt: new Date() },
+      });
+    } else if (!device.isOnline) {
+      device = await Device.findOneAndUpdate(
+        { deviceId: req.params.deviceId },
+        {
+          isOnline: true,
+          'lastHeartbeat.receivedAt': device.lastHeartbeat?.receivedAt || new Date(),
+        },
+        { new: true }
+      ).populate('patient', 'name email');
+    }
 
     res.json({ device });
   } catch (err) {

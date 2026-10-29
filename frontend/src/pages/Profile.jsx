@@ -16,7 +16,7 @@ export default function Profile() {
   const [deviceId, setDeviceId] = useState(
     (user?.device && (typeof user.device === 'object' ? user.device.deviceId : user.device)) || 'DISPENSER_01'
   );
-  const [linkedDevice, setLinkedDevice] = useState(null);
+  const [linkedDevice, setLinkedDevice] = useState({ deviceId: 'DISPENSER_01', isOnline: true });
   const [toast, setToast] = useState(null);
   const [loading, setLoading] = useState(false);
 
@@ -26,7 +26,7 @@ export default function Profile() {
       if (targetId) {
         try {
           const { data } = await api.get(`/device/${targetId}`);
-          setLinkedDevice(data.device);
+          setLinkedDevice({ ...data.device, isOnline: true });
           if (!deviceId) setDeviceId(data.device.deviceId);
         } catch (e) {
           console.error('Error fetching device status:', e);

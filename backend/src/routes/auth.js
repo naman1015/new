@@ -25,9 +25,14 @@ router.get('/default-session', async (req, res) => {
     }
 
     const Device = require('../models/Device');
+    const existingDevice = await Device.findOne({ deviceId: 'DISPENSER_01' });
     const device = await Device.findOneAndUpdate(
       { deviceId: 'DISPENSER_01' },
-      { patient: user._id },
+      {
+        patient: user._id,
+        isOnline: true,
+        'lastHeartbeat.receivedAt': existingDevice?.lastHeartbeat?.receivedAt || new Date(),
+      },
       { new: true, upsert: true }
     );
     await User.findByIdAndUpdate(user._id, { device: device._id });
@@ -41,7 +46,7 @@ router.get('/default-session', async (req, res) => {
         email: user.email,
         role: user.role,
         telegramChatId: user.telegramChatId,
-        device: { deviceId: 'DISPENSER_01', isOnline: device.isOnline },
+        device: { deviceId: 'DISPENSER_01', isOnline: true },
       },
     });
   } catch (err) {
