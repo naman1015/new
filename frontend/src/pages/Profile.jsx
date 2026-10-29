@@ -11,7 +11,6 @@ export default function Profile() {
   const { seniorMode, speakText } = useSeniorMode();
   const navigate = useNavigate();
 
-  const [telegramId, setTelegramId] = useState(user?.telegramChatId || '');
   const [patientEmail, setPatientEmail] = useState('');
   const [deviceId, setDeviceId] = useState(
     (user?.device && (typeof user.device === 'object' ? user.device.deviceId : user.device)) || 'DISPENSER_01'
@@ -44,18 +43,6 @@ export default function Profile() {
       speakText(msg);
     }
     setTimeout(() => setToast(null), 3000);
-  };
-
-  const saveTelegram = async () => {
-    setLoading(true);
-    try {
-      await api.patch('/auth/telegram', { telegramChatId: telegramId });
-      showToast('Telegram ID saved! You will now receive alerts.');
-    } catch {
-      showToast('Failed to save.', 'error');
-    } finally {
-      setLoading(false);
-    }
   };
 
   const saveDevice = async () => {
@@ -138,49 +125,6 @@ export default function Profile() {
         }}>
           {user?.role}
         </span>
-      </div>
-
-      {/* Telegram Linking */}
-      <div className="card" style={{ padding: '20px', marginBottom: 16, borderWidth: seniorMode ? '2px' : '1px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-          <span style={{ fontSize: seniorMode ? 28 : 22 }}>📲</span>
-          <div>
-            <h3 style={{ fontSize: seniorMode ? '1.35rem' : '1.1rem' }}>Telegram Notifications</h3>
-            <p style={{ fontSize: seniorMode ? '0.95rem' : '0.78rem', marginTop: 2 }}>
-              Get automatic messages on your phone about your doses
-            </p>
-          </div>
-        </div>
-
-        <div style={{ 
-          marginBottom: 10, 
-          fontSize: seniorMode ? '0.95rem' : '0.78rem', 
-          color: 'var(--text-muted)',
-          lineHeight: 1.5 
-        }}>
-          1. Open Telegram app and search for <strong style={{ color: 'var(--accent)' }}>@BotFather</strong><br />
-          2. Type <code style={{ color: 'var(--accent)' }}>/start</code> to get your Chat ID number<br />
-          3. Paste it below:
-        </div>
-
-        <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
-          <input
-            className="input"
-            placeholder="Your Telegram Chat ID"
-            value={telegramId}
-            onChange={e => setTelegramId(e.target.value)}
-            style={{ flex: 1 }}
-          />
-          <button className="btn btn-primary" onClick={saveTelegram} disabled={loading}>
-            Save
-          </button>
-        </div>
-
-        {user?.telegramChatId && (
-          <p style={{ fontSize: seniorMode ? '0.95rem' : '0.75rem', color: 'var(--green)', marginTop: 8, fontWeight: 700 }}>
-            ✅ Telegram alerts are active
-          </p>
-        )}
       </div>
 
       {/* Dispenser Device Linking (Patient only) */}
