@@ -382,7 +382,7 @@ export default function Home() {
               marginTop: 6,
               fontWeight: seniorMode ? '600' : '400'
             }}>
-              {taken} of {total - pending} doses completed today
+              {taken} of {total} doses completed today
             </p>
           </div>
 

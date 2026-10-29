@@ -46,8 +46,12 @@ export default function History() {
       const results = await Promise.all(
         days.map(async (day) => {
           try {
-            const { data: d } = await api.get(`/doses/stats?days=1`);
-            return { ...day, adherence: d.adherencePercent || 0 };
+            const { data: d } = await api.get(`/doses?date=${day.date}`);
+            const dayDoses = d.doses || [];
+            const completed = dayDoses.filter(x => x.status !== 'pending');
+            const takenCount = dayDoses.filter(x => x.status === 'taken').length;
+            const adherence = completed.length > 0 ? Math.round((takenCount / completed.length) * 100) : 0;
+            return { ...day, adherence };
           } catch {
             return day;
           }

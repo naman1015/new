@@ -2,19 +2,21 @@ const express = require('express');
 const Medication = require('../models/Medication');
 const Dose = require('../models/Dose');
 const { protect } = require('../middleware/auth');
+const {
+  getISTParts,
+  getISTDayBounds,
+  getISTDateForClockTime,
+} = require('../utils/time');
 
 const router = express.Router();
 
 // Helper: synchronize today's pending Dose records whenever a medication's times are created or updated
 async function syncTodayDosesForMedication(medication) {
   const now = new Date();
-  const todayDay = now.getDay();
+  const { dayOfWeek: todayDay } = getISTParts(now);
 
   // Remove old future pending doses for this medication today so updated times replace them cleanly
-  const startOfDay = new Date(now);
-  startOfDay.setHours(0, 0, 0, 0);
-  const endOfDay = new Date(now);
-  endOfDay.setHours(23, 59, 59, 999);
+  const { startOfDay, endOfDay } = getISTDayBounds(now);
 
   await Dose.deleteMany({
     medication: medication._id,
@@ -26,11 +28,10 @@ async function syncTodayDosesForMedication(medication) {
   if (medication.daysOfWeek?.length > 0 && !medication.daysOfWeek.includes(todayDay)) return;
 
   for (const timeStr of medication.times || []) {
-    const [hours, minutes] = timeStr.split(':').map(Number);
+    const [hours, minutes] = String(timeStr).split(':').map(Number);
     if (Number.isNaN(hours) || Number.isNaN(minutes)) continue;
 
-    const scheduledAt = new Date(now);
-    scheduledAt.setHours(hours, minutes, 0, 0);
+    const scheduledAt = getISTDateForClockTime(timeStr, now);
 
     // Create pending dose for any time today that hasn't passed more than 5 minutes ago
     if (scheduledAt.getTime() >= now.getTime() - 5 * 60 * 1000) {
