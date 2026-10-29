@@ -574,6 +574,31 @@ router.post('/schedule-reminder', async (req, res) => {
   }
 });
 
+// POST /api/doses/take/:id — patient/caretaker manually marks a dose as taken from the app
+router.post('/take/:id', async (req, res) => {
+  try {
+    const existing = await Dose.findById(req.params.id).populate('medication');
+    if (!existing) return res.status(404).json({ message: 'Dose not found.' });
+
+    if (existing.status !== 'taken') {
+      existing.status = 'taken';
+      existing.takenAt = new Date();
+      await existing.save();
+
+      const medId = existing.medication?._id || existing.medication;
+      if (medId) {
+        await Medication.findByIdAndUpdate(medId, {
+          $inc: { stockCount: -1 },
+        });
+      }
+    }
+
+    res.json({ message: 'Dose marked as taken.', dose: existing });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
 // POST /api/doses/skip/:id — patient skips a dose
 router.post('/skip/:id', async (req, res) => {
   try {

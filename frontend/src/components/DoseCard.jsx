@@ -19,6 +19,21 @@ export default function DoseCard({ dose, onUpdate }) {
     hour: '2-digit', minute: '2-digit', hour12: true,
   });
 
+  const handleTake = async () => {
+    setLoading(true);
+    try {
+      await api.post(`/doses/take/${dose._id}`);
+      onUpdate?.();
+      if (seniorMode) {
+        speakText(`Great job! ${med?.name || 'Medication'} marked as taken.`);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSkip = async () => {
     setLoading(true);
     try {
@@ -160,17 +175,32 @@ export default function DoseCard({ dose, onUpdate }) {
             </button>
 
             {dose.status === 'pending' && (
-              <button
-                className="btn btn-danger"
-                style={{ 
-                  padding: seniorMode ? '8px 16px' : '5px 10px', 
-                  fontSize: seniorMode ? '0.95rem' : '0.75rem' 
-                }}
-                onClick={handleSkip}
-                disabled={loading}
-              >
-                Skip
-              </button>
+              <>
+                <button
+                  className="btn btn-primary"
+                  style={{ 
+                    padding: seniorMode ? '8px 16px' : '5px 12px', 
+                    fontSize: seniorMode ? '0.95rem' : '0.75rem',
+                    background: 'var(--green)',
+                    color: '#fff',
+                  }}
+                  onClick={handleTake}
+                  disabled={loading}
+                >
+                  ✓ Take
+                </button>
+                <button
+                  className="btn btn-danger"
+                  style={{ 
+                    padding: seniorMode ? '8px 16px' : '5px 10px', 
+                    fontSize: seniorMode ? '0.95rem' : '0.75rem' 
+                  }}
+                  onClick={handleSkip}
+                  disabled={loading}
+                >
+                  Skip
+                </button>
+              </>
             )}
           </div>
         </div>
