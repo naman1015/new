@@ -144,6 +144,17 @@ app.get('/android', serveApk);
 
 if (fs.existsSync(frontendDist)) {
   app.use(express.static(frontendDist));
+
+  // Serve dedicated Laptop Web SPA under /laptop-web and /laptop-web/*
+  const laptopDist = path.join(frontendDist, 'laptop-web');
+  app.get('/laptop-web*', (req, res, next) => {
+    const laptopIndex = path.join(laptopDist, 'index.html');
+    if (fs.existsSync(laptopIndex)) {
+      return res.sendFile(laptopIndex);
+    }
+    return next();
+  });
+
   app.get('*', (req, res, next) => {
     if (req.path.startsWith('/api')) return next();
     res.sendFile(path.join(frontendDist, 'index.html'));
