@@ -36,9 +36,13 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// Auto refresh default session on 401 instead of redirecting to /login
+// Auto refresh default session on 401 instead of redirecting to /login (unless user explicitly logged out)
 api.interceptors.request.use(async (config) => {
-  if (!localStorage.getItem('token') && !config.url?.includes('/auth/')) {
+  if (
+    !localStorage.getItem('token') &&
+    localStorage.getItem('loggedOut') !== 'true' &&
+    !config.url?.includes('/auth/')
+  ) {
     try {
       const { data } = await axios.get(`${getBaseUrl()}/auth/default-session`);
       if (data?.token) {
@@ -57,7 +61,13 @@ api.interceptors.response.use(
   (res) => res,
   async (err) => {
     const orig = err.config;
-    if (err.response?.status === 401 && orig && !orig._retry && !orig.url?.includes('/auth/')) {
+    if (
+      err.response?.status === 401 &&
+      localStorage.getItem('loggedOut') !== 'true' &&
+      orig &&
+      !orig._retry &&
+      !orig.url?.includes('/auth/')
+    ) {
       orig._retry = true;
       try {
         const { data } = await api.get('/auth/default-session');

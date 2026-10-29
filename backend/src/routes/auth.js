@@ -11,6 +11,24 @@ const signToken = (id) =>
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',
   });
 
+// Helper: link default DISPENSER_01 device to patient and return live device payload
+async function linkDefaultDeviceToPatient(userId) {
+  const Device = require('../models/Device');
+  const device = await Device.findOneAndUpdate(
+    { deviceId: 'DISPENSER_01' },
+    { patient: userId },
+    { new: true, upsert: true }
+  );
+  await User.findByIdAndUpdate(userId, { device: device._id });
+
+  const lastSeen = device.lastHeartbeat?.receivedAt
+    ? new Date(device.lastHeartbeat.receivedAt).getTime()
+    : 0;
+  const isLiveOnline = Boolean(lastSeen && Date.now() - lastSeen <= 45 * 1000);
+
+  return { deviceId: 'DISPENSER_01', isOnline: isLiveOnline };
+}
+
 // GET /api/auth/default-session — auto-login default patient so dashboard opens directly without login wall
 router.get('/default-session', async (req, res) => {
   try {
@@ -24,18 +42,7 @@ router.get('/default-session', async (req, res) => {
       });
     }
 
-    const Device = require('../models/Device');
-    const device = await Device.findOneAndUpdate(
-      { deviceId: 'DISPENSER_01' },
-      { patient: user._id },
-      { new: true, upsert: true }
-    );
-    await User.findByIdAndUpdate(user._id, { device: device._id });
-
-    const lastSeen = device.lastHeartbeat?.receivedAt
-      ? new Date(device.lastHeartbeat.receivedAt).getTime()
-      : 0;
-    const isLiveOnline = Boolean(lastSeen && Date.now() - lastSeen <= 45 * 1000);
+    const deviceInfo = await linkDefaultDeviceToPatient(user._id);
 
     const token = signToken(user._id);
     res.json({
@@ -46,7 +53,7 @@ router.get('/default-session', async (req, res) => {
         email: user.email,
         role: user.role,
         telegramChatId: user.telegramChatId,
-        device: { deviceId: 'DISPENSER_01', isOnline: isLiveOnline },
+        device: deviceInfo,
       },
     });
   } catch (err) {
@@ -59,16 +66,31 @@ router.post('/register', async (req, res) => {
   try {
     const { name, email, password, role } = req.body;
 
-    const existing = await User.findOne({ email });
+    if (!name || !email || !password) {
+      return res.status(400).json({ message: 'Name, email, and password are required.' });
+    }
+
+    const normalizedEmail = String(email).trim().toLowerCase();
+    const existing = await User.findOne({ email: normalizedEmail });
     if (existing) {
       return res.status(400).json({ message: 'Email already registered.' });
     }
 
-    // Only allow patient and caretaker to self-register
-    const allowedRoles = ['patient', 'caretaker'];
+    // Allow patient, caretaker, and doctor to self-register
+    const allowedRoles = ['patient', 'caretaker', 'doctor'];
     const userRole = allowedRoles.includes(role) ? role : 'patient';
 
-    const user = await User.create({ name, email, password, role: userRole });
+    const user = await User.create({
+      name: String(name).trim(),
+      email: normalizedEmail,
+      password,
+      role: userRole,
+    });
+
+    let deviceInfo = { deviceId: 'DISPENSER_01', isOnline: false };
+    if (userRole === 'patient') {
+      deviceInfo = await linkDefaultDeviceToPatient(user._id);
+    }
 
     const token = signToken(user._id);
 
@@ -80,6 +102,7 @@ router.post('/register', async (req, res) => {
         name: user.name,
         email: user.email,
         role: user.role,
+        device: deviceInfo,
       },
     });
   } catch (err) {
@@ -96,9 +119,15 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ message: 'Email and password are required.' });
     }
 
-    const user = await User.findOne({ email }).select('+password');
+    const normalizedEmail = String(email).trim().toLowerCase();
+    const user = await User.findOne({ email: normalizedEmail }).select('+password');
     if (!user || !(await user.comparePassword(password))) {
       return res.status(401).json({ message: 'Invalid email or password.' });
+    }
+
+    let deviceInfo = { deviceId: 'DISPENSER_01', isOnline: false };
+    if (user.role === 'patient') {
+      deviceInfo = await linkDefaultDeviceToPatient(user._id);
     }
 
     const token = signToken(user._id);
@@ -112,6 +141,7 @@ router.post('/login', async (req, res) => {
         email: user.email,
         role: user.role,
         telegramChatId: user.telegramChatId,
+        device: deviceInfo,
       },
     });
   } catch (err) {
